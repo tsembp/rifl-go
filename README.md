@@ -1,179 +1,96 @@
-# Low-Latency Trading System
+# rifl-go
 
-A distributed electronic trading system built in Go to study how system architecture and communication choices affect latency, throughput, and resource usage under realistic and bursty workloads.
-
-## Project Context
-
-This project is developed for **ΕΠΛ452 / CS452 — Datacenter Computing** at the University of Cyprus by a team of two students.
-
-The course project asks teams to apply datacenter-computing concepts to a real-world problem. This project follows the **System Development and Optimization** direction: we build a distributed system, benchmark it under controlled workloads, and evaluate architectural optimizations.
-
-This is an educational simulation. It does not connect to a real exchange, trade real money, or attempt to build a profitable trading strategy.
+A small RIFL-inspired exactly-once RPC experiment using Go's `net/rpc`, developed
+for EPL452 / CS452 Datacenter Computing at the University of Cyprus.
 
 ## Problem
 
-Electronic trading systems must process large numbers of orders while keeping latency—especially tail latency—low and predictable. Communication protocols, serialization, service boundaries, deployment, contention, and workload bursts can all affect performance.
+A server may execute a request and then lose its response. The client cannot tell
+whether the operation happened. Retrying an increment, payment, or trading order
+without duplicate detection can repeat its side effects.
 
-The project investigates these effects using a simplified electronic exchange that we can fully control, instrument, deploy, and benchmark.
+This project studies how unique logical request IDs and saved results make
+retries safe, and what coordination and performance costs they introduce.
+The initial implementation uses conventional TCP RPC. A comparison with shared
+memory between Go processes, inspired by CXL-SHM, is a possible later extension.
 
-## Main Research Question
+## Current prototype
 
-**How do communication and deployment choices affect throughput and tail latency in a distributed electronic trading system under different workload intensities?**
+- A counter with `Counter.Add` and read-only `Counter.Value` RPC methods.
+- Random 128-bit client IDs and monotonically increasing request sequences.
+- A client wrapper that reconnects and retries the same request on transport
+  failures and per-attempt timeouts, bounded by a caller-provided context.
+- Server-side duplicate suppression and replay of the original result, including
+  counter-overflow errors. Reusing an ID with different arguments is rejected.
+- A mutex covering mutation and result recording, preventing concurrent attempts
+  from executing the same operation twice.
+- Tests over loopback TCP, including a response deliberately lost after execution.
 
-## Objectives
+### Guarantee and limitations
 
-1. Build a functional electronic trading system in Go.
-2. Implement a simplified limit order book and matching engine.
-3. Generate deterministic and configurable synthetic trading workloads.
-4. Run the system as multiple communicating components/services.
-5. Implement and compare at least two communication/configuration approaches.
-6. Measure end-to-end latency, internal component latency, throughput, CPU usage, and memory usage.
-7. Study system behavior under increasing load and sudden traffic bursts.
-8. Identify bottlenecks and explain the performance trade-offs observed experimentally.
+**State and completion records are in memory. The guarantee covers one server
+lifetime only.** Both are lost on restart. This is an initial demonstration,
+not a complete implementation of RIFL or durable exactly-once RPC.
 
-## System Overview
+A request is identified by `(ClientID, Sequence)`. Retrying that ID with the same
+arguments returns its original result even after other requests change the
+counter. A timeout or cancellation does not undo an operation: its outcome can
+remain unknown. Retain the same request object if you need to retry afterward.
+Calling `NewRequest` again creates another logical operation.
 
-The initial system consists of four logical components:
+Completion records currently grow without bound. Persistence, acknowledgement
+tracking, garbage collection, client leases, failure recovery, financial workloads,
+and performance experiments are future work. No CXL hardware or emulation is
+implemented yet. The client opens one TCP connection per attempt for simplicity;
+this is not an optimized networking baseline.
 
-```text
-Market / Workload Generator
-          |
-          v
-   Simulated Clients
-          |
-          | orders
-          v
-     Order Gateway
-          |
-          v
-    Matching Engine
-     + Order Book
-          |
-          v
- Execution / ACK Response
+## Run
+
+Requires Go 1.22 or newer. There are no external dependencies.
+
+Start a server:
+
+```sh
+go run ./cmd/server -addr 127.0.0.1:9000
 ```
 
-### Workload Generator / Simulated Clients
+In another terminal:
 
-Synthetic clients generate orders at controlled rates. The workload can vary by number of clients, orders per second, order distribution, and burst behavior.
-
-No real market data is required. Synthetic market/order data gives us reproducible experiments and precise control over system load.
-
-### Order Gateway
-
-The gateway accepts client requests, validates/parses messages, forwards valid orders to the matching engine, and returns acknowledgements or execution results.
-
-### Matching Engine
-
-The matching engine maintains an in-memory limit order book and processes orders using price-time priority.
-
-The initial supported operations are intentionally limited to:
-
-- LIMIT BUY
-- LIMIT SELL
-- CANCEL
-
-Features such as derivatives, portfolios, margin, P&L, real brokerage connectivity, and sophisticated trading strategies are outside the core scope.
-
-## Architecture Comparison
-
-The project will maintain a simple baseline and an optimized communication configuration. The exact optimized protocol may evolve after initial implementation and profiling.
-
-A likely baseline is:
-
-```text
-Clients -> HTTP/JSON -> Gateway -> HTTP/JSON -> Matching Engine
+```sh
+go run ./cmd/client -addr 127.0.0.1:9000 -delta 10
 ```
 
-A likely optimized configuration is:
+The demo sends the **same request twice**. On a fresh server both replies show
+`10`, and the counter is incremented once. Each new invocation of the CLI creates
+a new client identity and therefore a new logical operation.
 
-```text
-Clients -> persistent TCP/binary protocol -> Gateway -> persistent TCP/binary protocol -> Matching Engine
+## Test
+
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-The purpose is not to assume that one approach is better, but to measure the behavior of both under controlled conditions.
+The tests verify lost-response retry, original-result replay, concurrent duplicate
+and unique requests, request validation, conflicting ID reuse, remembered overflow
+errors, timeout retries, and cancellation. They do not establish crash durability
+or substitute for a formal correctness proof.
 
-## Experimental Evaluation
+## Next steps
 
-Experiments will vary workload intensity, for example:
+1. Add atomic durable storage of counter mutations and completion records, with
+   restart tests at explicitly defined crash points.
+2. Add acknowledgements and safe record reclamation, preserving stale-request
+   detection after results are removed.
+3. Evaluate equivalent unprotected and protected RPC workloads under the same
+   transport and storage configuration.
+4. Add a small financial demonstration; consider a shared-memory transport if
+   time permits and the instructor confirms its scope.
 
-```text
-1,000 orders/s
-5,000 orders/s
-10,000 orders/s
-25,000 orders/s
-50,000 orders/s
-```
+## References
 
-Actual ranges will be selected based on the capacity of the available hardware so that experiments cover both normal operation and saturation.
+- [RIFL: Implementing Linearizability at Large Scale and Low Latency (SOSP 2015)](https://sigops.org/s/conferences/sosp/2015/current/2015-Monterey/126-lee-online.pdf)
+- [CXL-SHM: Partial Failure Resilient Memory Management System (SOSP 2023)](https://doi.org/10.1145/3600006.3613135)
 
-We will also introduce burst workloads that emulate sudden increases in trading activity.
-
-### Primary Metrics
-
-- successful throughput (orders/second)
-- p50 latency
-- p95 latency
-- p99 latency
-- optionally p99.9 latency where sample size permits
-- CPU utilization
-- memory usage
-- error/rejection rate
-
-Where useful, requests will be timestamped at several stages so that end-to-end latency can be separated from gateway and matching-engine processing time.
-
-## Deployment
-
-During development, all components may run locally as separate processes or containers.
-
-For final experiments, we aim to deploy components across multiple nodes when course infrastructure permits, for example:
-
-```text
-Node 1: Workload Generator / Clients
-Node 2: Order Gateway
-Node 3: Matching Engine
-```
-
-The project does not require one physical machine per simulated trader; many logical clients can be generated from a small number of machines.
-
-## Technology
-
-The primary implementation language is **Go**.
-
-Go is suitable for the project because it provides straightforward networking, concurrency, profiling, testing, and deployment as standalone binaries while keeping the implementation manageable for a two-person course project.
-
-Supporting tooling may include Docker/containers, Linux performance tools, Go benchmarks/profiling, and experiment-analysis scripts where appropriate.
-
-## Scope and Success Criteria
-
-The minimum successful project consists of:
-
-- a correct basic matching engine and order book;
-- synthetic concurrent clients;
-- a working distributed request path;
-- a reproducible workload generator;
-- instrumentation and metrics collection;
-- controlled performance experiments;
-- analysis of latency and throughput under multiple loads.
-
-The target version additionally compares two communication/configuration approaches and runs experiments across multiple machines.
-
-Stretch work may investigate CPU affinity, alternative serialization, queueing/backpressure, additional deployment configurations, or other optimizations identified through profiling.
-
-The project deliberately prioritizes **systems engineering and experimental analysis over financial complexity**.
-
-## Course Deliverables
-
-According to the CS452 project specification, the formal milestones are:
-
-- Project proposal — end of Week 5
-- Midterm status report — end of Week 9
-- Final presentation — Week 13
-
-The proposal must clearly define the problem, objectives, achievable scope, methodology, rough timeline, and team responsibilities.
-
-## Repository Documentation
-
-This `README.md` provides the high-level project definition and should remain understandable to instructors, contributors, recruiters, and AI development agents.
-
-Detailed architecture, engineering conventions, protocols, benchmarking rules, and implementation guidance are maintained in [`DEVELOPMENT.md`](DEVELOPMENT.md).
+Contributor and AI-agent guidance is in [AGENTS.md](AGENTS.md).
