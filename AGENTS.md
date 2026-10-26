@@ -12,22 +12,29 @@ outside the current implementation.
 - cmd/server and cmd/client are minimal runnable examples.
 - Counter uses one mutex for state mutation and completion recording. Deduplication
   state belongs to the service, not the TCP connection.
+- store.go provides PersistentCounter via OpenCounter(path). The server CLI uses
+  this durable implementation by default, with a configurable -db path.
+- PersistentCounter uses one bbolt write transaction for the state change and
+  completion record; do not enable NoSync or add a separate result cache.
 - Replies are saved per logical request. Do not substitute the current counter
   value when replaying an old request.
-- Transport failures are ambiguous and retryable; rpc.ServerError is a definitive
-  application reply and must not be retried indefinitely.
+- Transport failures are ambiguous and retryable. rpc.ServerError is definitive
+  except for the reserved storageErrorPrefix, which signals an ambiguous storage
+  failure. Keep that distinction in the client and server.
 - A timed-out request may still execute. Never allocate a new sequence on retry.
 - Each attempt has its own connection and reply variable. Wait for decoder
   completion before returning from a cancelled attempt.
 
 ## Scope and correctness
 
-The implementation is in-memory only. Do not claim restart recovery, durable
-exactly-once execution, generic transactional RPC, bounded metadata, or full RIFL
-support. Keep improvements small and explain the failure model in documentation.
+The zero-value Counter is in-memory only. PersistentCounter survives server-process
+restart using the same intact database, with bbolt's default sync behavior. Tests
+do not establish power-loss or corruption tolerance. Do not claim generic
+transactional RPC, bounded metadata, replication, or full RIFL support.
 Do not silently evict completion records or introduce TTL cleanup: a late retry
-could execute again. Future persistence must commit the application mutation and
-completion result atomically, with crash-point tests before claiming recovery.
+could execute again. Preserve atomic mutation/result commits. Test-only hooks in
+PersistentCounter allow subprocess termination before commit and after commit
+before response; never expose them as production RPC controls.
 
 The lost-response test wraps a server connection and fails its response write
 after net/rpc has executed the handler. Keep this test exercising a real RPC

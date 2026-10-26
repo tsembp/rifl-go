@@ -21,7 +21,7 @@ func (c dropReplyConn) Write(_ []byte) (int, error) {
 	return 0, errors.New("injected lost response")
 }
 
-func startServer(t *testing.T, counter *Counter, dropFirst bool) (string, *atomic.Int64) {
+func startServer(t *testing.T, counter any, dropFirst bool) (string, *atomic.Int64) {
 	t.Helper()
 	s := rpc.NewServer()
 	if err := s.RegisterName("Counter", counter); err != nil {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -56,7 +57,7 @@ func (c *Client) Add(ctx context.Context, req AddRequest) (AddReply, error) {
 			return reply, nil
 		}
 		var serverErr rpc.ServerError
-		if errors.As(err, &serverErr) {
+		if errors.As(err, &serverErr) && !strings.HasPrefix(string(serverErr), storageErrorPrefix) {
 			return AddReply{}, err
 		}
 		timer := time.NewTimer(c.retryDelay)

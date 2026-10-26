@@ -1,5 +1,5 @@
-// Package riflrpc provides a minimal, in-memory RIFL-inspired RPC experiment.
-// Completion records do not survive a server restart.
+// Package riflrpc provides a small RIFL-inspired RPC experiment, with in-memory
+// and durable counter implementations.
 package riflrpc
 
 import (
@@ -60,12 +60,9 @@ func (c *Counter) Add(req AddRequest, reply *AddReply) error {
 		c.completed = make(map[RequestID]completion)
 	}
 	result := completion{delta: req.Delta}
-	if (req.Delta > 0 && c.value > math.MaxInt64-req.Delta) ||
-		(req.Delta < 0 && c.value < math.MinInt64-req.Delta) {
-		result.err = "counter overflow"
-	} else {
-		c.value += req.Delta
-		result.reply.Value = c.value
+	result.reply.Value, result.err = addValue(c.value, req.Delta)
+	if result.err == "" {
+		c.value = result.reply.Value
 	}
 	c.completed[req.ID] = result
 	if result.err != "" {
@@ -73,6 +70,14 @@ func (c *Counter) Add(req AddRequest, reply *AddReply) error {
 	}
 	*reply = result.reply
 	return nil
+}
+
+func addValue(value, delta int64) (int64, string) {
+	if (delta > 0 && value > math.MaxInt64-delta) ||
+		(delta < 0 && value < math.MinInt64-delta) {
+		return 0, "counter overflow"
+	}
+	return value + delta, ""
 }
 
 // Value returns the current counter for inspection; it does not change state.

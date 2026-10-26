@@ -1,0 +1,2 @@
+# Local counter database; tests use temporary directories.
+/rifl.db

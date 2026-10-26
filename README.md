@@ -22,15 +22,25 @@ memory between Go processes, inspired by CXL-SHM, is a possible later extension.
   failures and per-attempt timeouts, bounded by a caller-provided context.
 - Server-side duplicate suppression and replay of the original result, including
   counter-overflow errors. Reusing an ID with different arguments is rejected.
-- A mutex covering mutation and result recording, preventing concurrent attempts
-  from executing the same operation twice.
-- Tests over loopback TCP, including a response deliberately lost after execution.
+- A bbolt-backed counter that commits the mutation and completion record together,
+  preserving duplicate protection and original results across server restarts.
+- The original in-memory counter, retained for comparison and tests.
+- Tests over loopback TCP, including lost responses, concurrent duplicates,
+  database reopen, and abrupt server-process termination at transaction boundaries.
 
 ### Guarantee and limitations
 
-**State and completion records are in memory. The guarantee covers one server
-lifetime only.** Both are lost on restart. This is an initial demonstration,
-not a complete implementation of RIFL or durable exactly-once RPC.
+**The server stores state and completion records in a bbolt database.** An increment
+and its result are committed in one transaction before success is returned. A crash
+before commit leaves neither visible; a crash after commit preserves both. Restart
+with the same database to replay results without repeating their side effects.
+
+The guarantee assumes the database remains intact and the filesystem/device honors
+sync operations. bbolt's default synchronization stays enabled. Tests cover process
+crashes, not power failures or storage corruption. One process owns the database;
+another opener fails after a bounded lock wait. There is no replication or failover.
+The zero-value `Counter` still uses memory only and loses everything on restart;
+`OpenCounter(path)` creates the persistent service used by the server CLI.
 
 A request is identified by `(ClientID, Sequence)`. Retrying that ID with the same
 arguments returns its original result even after other requests change the
@@ -38,20 +48,27 @@ counter. A timeout or cancellation does not undo an operation: its outcome can
 remain unknown. Retain the same request object if you need to retry afterward.
 Calling `NewRequest` again creates another logical operation.
 
-Completion records currently grow without bound. Persistence, acknowledgement
-tracking, garbage collection, client leases, failure recovery, financial workloads,
+Clients must retain the original request ID and arguments across retries, including
+after server restarts. The client CLI creates a new ID on every invocation; it is
+not a tool for replaying a previous invocation. Application errors such as overflow
+are remembered, while storage errors remain retryable/ambiguous rather than being
+treated as definitive rejections. A storage error is signaled with the reserved
+`storage outcome unknown: ` RPC error prefix.
+
+Completion records currently grow without bound. Acknowledgement
+tracking, garbage collection, client leases, financial workloads,
 and performance experiments are future work. No CXL hardware or emulation is
 implemented yet. The client opens one TCP connection per attempt for simplicity;
 this is not an optimized networking baseline.
 
 ## Run
 
-Requires Go 1.22 or newer. There are no external dependencies.
+Requires Go 1.22 or newer. Uses `go.etcd.io/bbolt` for embedded transactional storage.
 
 Start a server:
 
 ```sh
-go run ./cmd/server -addr 127.0.0.1:9000
+go run ./cmd/server -addr 127.0.0.1:9000 -db ./rifl.db
 ```
 
 In another terminal:
@@ -64,6 +81,11 @@ The demo sends the **same request twice**. On a fresh server both replies show
 `10`, and the counter is incremented once. Each new invocation of the CLI creates
 a new client identity and therefore a new logical operation.
 
+Restarting the server with the same `-db` path preserves the counter and results.
+Do not delete the database to recover a failed server: doing so also deletes the
+deduplication history. `/rifl.db` is ignored by Git; keep other database paths
+outside the repository or add their exact paths to your local ignore rules.
+
 ## Test
 
 ```sh
@@ -74,18 +96,18 @@ go vet ./...
 
 The tests verify lost-response retry, original-result replay, concurrent duplicate
 and unique requests, request validation, conflicting ID reuse, remembered overflow
-errors, timeout retries, and cancellation. They do not establish crash durability
-or substitute for a formal correctness proof.
+errors, timeout retries, and cancellation. Storage tests also verify original
+results and errors after reopen, recovery before/after commit using a subprocess
+that exits without closing its database, and ambiguous storage failures. They
+do not simulate power loss or substitute for a formal correctness proof.
 
 ## Next steps
 
-1. Add atomic durable storage of counter mutations and completion records, with
-   restart tests at explicitly defined crash points.
-2. Add acknowledgements and safe record reclamation, preserving stale-request
+1. Add acknowledgements and safe record reclamation, preserving stale-request
    detection after results are removed.
-3. Evaluate equivalent unprotected and protected RPC workloads under the same
+2. Evaluate equivalent unprotected and protected RPC workloads under the same
    transport and storage configuration.
-4. Add a small financial demonstration; consider a shared-memory transport if
+3. Add a small financial demonstration; consider a shared-memory transport if
    time permits and the instructor confirms its scope.
 
 ## References
