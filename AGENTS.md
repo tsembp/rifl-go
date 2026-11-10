@@ -14,6 +14,13 @@ outside the current implementation.
   state belongs to the service, not the TCP connection.
 - store.go provides PersistentCounter via OpenCounter(path). The server CLI uses
   this durable implementation by default, with a configurable -db path.
+- baseline.go provides the durable retry-only UnprotectedCounter used solely as
+  the fair comparison baseline. cmd/bench generates CSV and cmd/benchplot creates
+  dependency-free SVG summaries; see BENCHMARKS.md for experiment rules.
+- The benchmark supports duration runs, independent virtual-client and worker
+  counts, payload padding, retry-rate and transport-recovery workloads, raw latency
+  samples, timelines, and batched acknowledgements. CloudLab uses native static
+  binaries on bare metal; see cloudlab/README.md.
 - PersistentCounter uses one bbolt write transaction for the state change and
   completion record; do not enable NoSync or add a separate result cache.
 - Replies are saved per logical request. Do not substitute the current counter
@@ -24,6 +31,11 @@ outside the current implementation.
 - A timed-out request may still execute. Never allocate a new sequence on retry.
 - Each attempt has its own connection and reply variable. Wait for decoder
   completion before returning from a cancelled attempt.
+- The client tracks unfinished sequences and piggybacks `FirstIncomplete`; only a
+  definitive reply marks a sequence complete. Ambiguous failures remain unfinished.
+- A server acknowledgement boundary only moves forward. Advancing it, deleting
+  lower completion records, and applying the incoming operation share one bbolt
+  transaction. Any request below the stored boundary is permanently stale.
 
 ## Scope and correctness
 
@@ -31,10 +43,12 @@ The zero-value Counter is in-memory only. PersistentCounter survives server-proc
 restart using the same intact database, with bbolt's default sync behavior. Tests
 do not establish power-loss or corruption tolerance. Do not claim generic
 transactional RPC, bounded metadata, replication, or full RIFL support.
-Do not silently evict completion records or introduce TTL cleanup: a late retry
-could execute again. Preserve atomic mutation/result commits. Test-only hooks in
-PersistentCounter allow subprocess termination before commit and after commit
-before response; never expose them as production RPC controls.
+Do not evict completion records except through a valid acknowledgement, or
+introduce TTL cleanup: a late retry could execute again. Preserve atomic mutation,
+result, acknowledgement, and reclamation commits. Per-client durable boundaries
+remain until leases are implemented. Test-only hooks in PersistentCounter allow
+subprocess termination before commit and after commit before response; never
+expose them as production RPC controls.
 
 The lost-response test wraps a server connection and fails its response write
 after net/rpc has executed the handler. Keep this test exercising a real RPC

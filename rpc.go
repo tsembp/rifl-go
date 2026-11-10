@@ -17,10 +17,24 @@ type RequestID struct {
 type AddRequest struct {
 	ID    RequestID
 	Delta int64
+	// FirstIncomplete acknowledges every lower sequence for this client.
+	FirstIncomplete uint64
+	// Padding is transport-only benchmark data and does not affect Add semantics.
+	Padding []byte
 }
 
 type AddReply struct {
 	Value int64
+}
+
+// ServiceStats exposes read-only measurements used by the benchmark runner.
+// CompletionRecords and ClientBoundaries are zero for an unprotected service.
+type ServiceStats struct {
+	Protected         bool
+	Value             int64
+	CompletionRecords int
+	ClientBoundaries  int
+	DatabaseBytes     int64
 }
 
 type completion struct {
@@ -31,21 +45,26 @@ type completion struct {
 
 // Counter serializes mutations and completion tracking in one critical section.
 // Create it once per server lifetime; creating it per connection loses deduplication.
-// The zero value is ready to use. Records are retained until the server exits.
+// The zero value is ready to use. Records are retained until acknowledged.
 type Counter struct {
-	mu        sync.Mutex
-	value     int64
-	completed map[RequestID]completion
+	mu              sync.Mutex
+	value           int64
+	completed       map[RequestID]completion
+	firstIncomplete map[string]uint64
 }
 
-// Add executes a logical increment once, or returns its original result.
-// Reusing an ID with different arguments is rejected.
+// Add processes the client's acknowledgement, then executes a logical increment
+// once or returns its original result. Reclaimed requests are rejected as stale.
 func (c *Counter) Add(req AddRequest, reply *AddReply) error {
-	if req.ID.ClientID == "" || req.ID.Sequence == 0 {
-		return errors.New("client ID and nonzero sequence are required")
+	if err := validateAddRequest(req); err != nil {
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.processAck(req.ID.ClientID, req.FirstIncomplete)
+	if req.ID.Sequence < c.clientFirstIncomplete(req.ID.ClientID) {
+		return errors.New(staleRequestError)
+	}
 	if result, ok := c.completed[req.ID]; ok {
 		if result.delta != req.Delta {
 			return errors.New("request ID reused with different arguments")
@@ -70,6 +89,37 @@ func (c *Counter) Add(req AddRequest, reply *AddReply) error {
 	}
 	*reply = result.reply
 	return nil
+}
+
+const staleRequestError = "stale request"
+
+func validateAddRequest(req AddRequest) error {
+	if req.ID.ClientID == "" || req.ID.Sequence == 0 || req.FirstIncomplete == 0 {
+		return errors.New("client ID, nonzero sequence and nonzero first incomplete are required")
+	}
+	return nil
+}
+
+func (c *Counter) clientFirstIncomplete(clientID string) uint64 {
+	if first := c.firstIncomplete[clientID]; first != 0 {
+		return first
+	}
+	return 1
+}
+
+func (c *Counter) processAck(clientID string, firstIncomplete uint64) {
+	if firstIncomplete <= c.clientFirstIncomplete(clientID) {
+		return
+	}
+	if c.firstIncomplete == nil {
+		c.firstIncomplete = make(map[string]uint64)
+	}
+	c.firstIncomplete[clientID] = firstIncomplete
+	for id := range c.completed {
+		if id.ClientID == clientID && id.Sequence < firstIncomplete {
+			delete(c.completed, id)
+		}
+	}
 }
 
 func addValue(value, delta int64) (int64, string) {

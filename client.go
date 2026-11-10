@@ -9,7 +9,7 @@ import (
 	"net"
 	"net/rpc"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -18,9 +18,13 @@ import (
 type Client struct {
 	address        string
 	id             string
-	sequence       atomic.Uint64
 	attemptTimeout time.Duration
 	retryDelay     time.Duration
+
+	mu              sync.Mutex
+	sequence        uint64
+	firstIncomplete uint64
+	unfinished      map[uint64]struct{}
 }
 
 func NewClient(address string, attemptTimeout, retryDelay time.Duration) (*Client, error) {
@@ -31,33 +35,52 @@ func NewClient(address string, attemptTimeout, retryDelay time.Duration) (*Clien
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, fmt.Errorf("generate client ID: %w", err)
 	}
-	return &Client{address: address, id: hex.EncodeToString(id[:]),
-		attemptTimeout: attemptTimeout, retryDelay: retryDelay}, nil
+	return &Client{
+		address:         address,
+		id:              hex.EncodeToString(id[:]),
+		attemptTimeout:  attemptTimeout,
+		retryDelay:      retryDelay,
+		firstIncomplete: 1,
+		unfinished:      make(map[uint64]struct{}),
+	}, nil
 }
 
-// NewRequest allocates an ID once. Keep this request if a call's outcome is unknown.
+// NewRequest allocates an ID and marks its sequence unfinished. Keep this request
+// if a call's outcome is unknown; abandoning it prevents later acknowledgements
+// from advancing past its sequence.
 func (c *Client) NewRequest(delta int64) AddRequest {
-	seq := c.sequence.Add(1)
-	if seq == 0 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sequence == ^uint64(0) {
 		panic("request sequence exhausted")
 	}
-	return AddRequest{ID: RequestID{ClientID: c.id, Sequence: seq}, Delta: delta}
+	c.sequence++
+	c.unfinished[c.sequence] = struct{}{}
+	return AddRequest{
+		ID:              RequestID{ClientID: c.id, Sequence: c.sequence},
+		Delta:           delta,
+		FirstIncomplete: c.firstIncomplete,
+	}
 }
 
 // Add retries the same request until a definitive reply or context expiration.
-// Cancellation does not undo server execution. After an ambiguous failure, retry
-// this exact request; creating a fresh ID represents another logical operation.
+// A definitive reply marks the sequence complete and allows a later attempt to
+// acknowledge it. Cancellation does not undo server execution. After an ambiguous
+// failure, retry this exact request; creating a fresh ID is another operation.
 func (c *Client) Add(ctx context.Context, req AddRequest) (AddReply, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return AddReply{}, err
 		}
-		reply, err := c.attempt(ctx, req)
+		attemptReq := c.prepareRequest(req)
+		reply, err := c.attempt(ctx, attemptReq)
 		if err == nil {
+			c.requestCompleted(req.ID)
 			return reply, nil
 		}
 		var serverErr rpc.ServerError
 		if errors.As(err, &serverErr) && !strings.HasPrefix(string(serverErr), storageErrorPrefix) {
+			c.requestCompleted(req.ID)
 			return AddReply{}, err
 		}
 		timer := time.NewTimer(c.retryDelay)
@@ -67,6 +90,34 @@ func (c *Client) Add(ctx context.Context, req AddRequest) (AddReply, error) {
 			return AddReply{}, fmt.Errorf("RPC outcome unknown (last attempt: %v): %w", err, ctx.Err())
 		case <-timer.C:
 		}
+	}
+}
+
+func (c *Client) prepareRequest(req AddRequest) AddRequest {
+	if req.ID.ClientID != c.id {
+		return req
+	}
+	c.mu.Lock()
+	req.FirstIncomplete = c.firstIncomplete
+	c.mu.Unlock()
+	return req
+}
+
+func (c *Client) requestCompleted(id RequestID) {
+	if id.ClientID != c.id {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.unfinished[id.Sequence]; !ok {
+		return
+	}
+	delete(c.unfinished, id.Sequence)
+	for c.firstIncomplete <= c.sequence {
+		if _, unfinished := c.unfinished[c.firstIncomplete]; unfinished {
+			break
+		}
+		c.firstIncomplete++
 	}
 }
 

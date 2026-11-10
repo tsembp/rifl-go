@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -16,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestPersistentReopen(t *testing.T) {
@@ -24,8 +28,8 @@ func TestPersistentReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := AddRequest{RequestID{"client", 1}, math.MaxInt64}
-	overflow := AddRequest{RequestID{"client", 2}, 1}
+	req := testRequest("client", 1, math.MaxInt64, 1)
+	overflow := testRequest("client", 2, 1, 1)
 	var reply AddReply
 	if err := c.Add(req, &reply); err != nil {
 		t.Fatal(err)
@@ -33,7 +37,7 @@ func TestPersistentReopen(t *testing.T) {
 	if err := c.Add(overflow, &reply); err == nil {
 		t.Fatal("overflow accepted")
 	}
-	if err := c.Add(AddRequest{RequestID{"client", 3}, -1}, &reply); err != nil {
+	if err := c.Add(testRequest("client", 3, -1, 1), &reply); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Close(); err != nil {
@@ -84,19 +88,146 @@ func TestPersistentConcurrentLostResponse(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 24; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			if reply, err := client.Add(ctx, req); err != nil || reply.Value != 10 {
+			if reply, err := rpcAdd(addr, req); err != nil || reply.Value != 10 {
 				t.Errorf("duplicate: %+v, %v", reply, err)
 			}
-			if _, err := client.Add(ctx, client.NewRequest(1)); err != nil {
+			unique := testRequest(fmt.Sprintf("persistent-unique-%d", i), 1, 1, 1)
+			if _, err := rpcAdd(addr, unique); err != nil {
 				t.Error(err)
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
 	var value int64
 	if err := c.Value(struct{}{}, &value); err != nil || value != 34 {
+		t.Fatalf("value=%d, err=%v", value, err)
+	}
+}
+
+func persistentClientState(t *testing.T, c *PersistentCounter, clientID string) (uint64, int) {
+	t.Helper()
+	var firstIncomplete uint64
+	count := 0
+	err := c.db.View(func(tx *bolt.Tx) error {
+		var err error
+		firstIncomplete, err = persistentFirstIncomplete(tx.Bucket(clientsBucket), clientID)
+		if err != nil {
+			return err
+		}
+		cursor := tx.Bucket(resultsBucket).Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			var id RequestID
+			if err := json.Unmarshal(key, &id); err != nil {
+				return err
+			}
+			if id.ClientID == clientID {
+				count++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return firstIncomplete, count
+}
+
+func TestPersistentAcknowledgementSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "counter.db")
+	c, err := OpenCounter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply AddReply
+	first := testRequest("client", 1, 10, 1)
+	second := testRequest("client", 2, 5, 2)
+	if err := c.Add(first, &reply); err != nil || reply.Value != 10 {
+		t.Fatalf("first: %+v, %v", reply, err)
+	}
+	if err := c.Add(second, &reply); err != nil || reply.Value != 15 {
+		t.Fatalf("second: %+v, %v", reply, err)
+	}
+	if boundary, count := persistentClientState(t, c, "client"); boundary != 2 || count != 1 {
+		t.Fatalf("boundary=%d completions=%d, want 2 and 1", boundary, count)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err = OpenCounter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Add(first, &reply); err == nil || err.Error() != staleRequestError {
+		t.Fatalf("reclaimed request was not stale after restart: %v", err)
+	}
+	third := testRequest("client", 3, 2, 1) // Stale acknowledgement must not lower the boundary.
+	if err := c.Add(third, &reply); err != nil || reply.Value != 17 {
+		t.Fatalf("third: %+v, %v", reply, err)
+	}
+	if boundary, count := persistentClientState(t, c, "client"); boundary != 2 || count != 2 {
+		t.Fatalf("boundary=%d completions=%d, want 2 and 2", boundary, count)
+	}
+	fourth := testRequest("client", 4, 1, 4)
+	if err := c.Add(fourth, &reply); err != nil || reply.Value != 18 {
+		t.Fatalf("fourth: %+v, %v", reply, err)
+	}
+	if boundary, count := persistentClientState(t, c, "client"); boundary != 4 || count != 1 {
+		t.Fatalf("boundary=%d completions=%d, want 4 and 1", boundary, count)
+	}
+	overflow := testRequest("client", 5, math.MaxInt64, 4)
+	if err := c.Add(overflow, &reply); err == nil {
+		t.Fatal("overflow accepted")
+	}
+	sixth := testRequest("client", 6, -1, 6)
+	if err := c.Add(sixth, &reply); err != nil || reply.Value != 17 {
+		t.Fatalf("sixth: %+v, %v", reply, err)
+	}
+	if err := c.Add(overflow, &reply); err == nil || err.Error() != staleRequestError {
+		t.Fatalf("acknowledged overflow was not stale: %v", err)
+	}
+}
+
+func TestOpenCounterMigratesAcknowledgementBucket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "counter.db")
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		state, err := tx.CreateBucket(stateBucket)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucket(resultsBucket); err != nil {
+			return err
+		}
+		var value [8]byte
+		binary.BigEndian.PutUint64(value[:], 7)
+		return state.Put(valueKey, value[:])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := OpenCounter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(clientsBucket) == nil {
+			return errors.New("clients bucket was not created")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var value int64
+	if err := c.Value(struct{}{}, &value); err != nil || value != 7 {
 		t.Fatalf("value=%d, err=%v", value, err)
 	}
 }
@@ -117,6 +248,9 @@ func TestStorageFailureRemainsAmbiguous(t *testing.T) {
 	defer cancel()
 	if _, err := client.Add(ctx, req); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("storage error must not be a definitive rejection: %v", err)
+	}
+	if got := client.prepareRequest(req).FirstIncomplete; got != req.ID.Sequence {
+		t.Fatalf("ambiguous storage failure acknowledged request: first incomplete=%d", got)
 	}
 	if attempts.Load() < 2 {
 		t.Fatal("storage failure was not retried")
@@ -232,7 +366,7 @@ func TestCrashRecovery(t *testing.T) {
 			}
 			conn.SetDeadline(time.Now().Add(3 * time.Second))
 			client := rpc.NewClient(conn)
-			req := AddRequest{RequestID{"surviving-client", 42}, 10}
+			req := testRequest("surviving-client", 42, 10, 1)
 			var reply AddReply
 			err = client.Call("Counter.Add", req, &reply)
 			client.Close()
@@ -279,6 +413,72 @@ func TestCrashRecovery(t *testing.T) {
 			}
 			if err := probe.Call("Counter.Value", struct{}{}, &value); err != nil || value != 15 {
 				t.Fatalf("final value=%d, err=%v", value, err)
+			}
+		})
+	}
+}
+
+func TestAcknowledgementCrashRecovery(t *testing.T) {
+	for _, point := range []string{"before", "after"} {
+		t.Run(point, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "counter.db")
+			counter, err := OpenCounter(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := testRequest("ack-client", 1, 10, 1)
+			var reply AddReply
+			if err := counter.Add(first, &reply); err != nil {
+				t.Fatal(err)
+			}
+			if err := counter.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			addr, crashed := launchCrashServer(t, path, point)
+			client, err := rpc.Dial("tcp", addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second := testRequest("ack-client", 2, 5, 2)
+			err = client.Call("Counter.Add", second, &reply)
+			client.Close()
+			if err == nil {
+				t.Fatal("crashed server returned success")
+			}
+			select {
+			case <-crashed.done:
+				var exit *exec.ExitError
+				if !errors.As(crashed.err, &exit) || exit.ExitCode() != 79 {
+					t.Fatalf("wrong crash: %v, %s", crashed.err, crashed.stderr.String())
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("crash did not terminate server")
+			}
+
+			counter, err = OpenCounter(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer counter.Close()
+			var value int64
+			if err := counter.Value(struct{}{}, &value); err != nil {
+				t.Fatal(err)
+			}
+			wantValue, wantBoundary := int64(10), uint64(1)
+			if point == "after" {
+				wantValue, wantBoundary = 15, 2
+			}
+			boundary, count := persistentClientState(t, counter, "ack-client")
+			if value != wantValue || boundary != wantBoundary || count != 1 {
+				t.Fatalf("value=%d boundary=%d completions=%d; want %d, %d, 1",
+					value, boundary, count, wantValue, wantBoundary)
+			}
+			if err := counter.Add(second, &reply); err != nil || reply.Value != 15 {
+				t.Fatalf("retry second: %+v, %v", reply, err)
+			}
+			if err := counter.Add(first, &reply); err == nil || err.Error() != staleRequestError {
+				t.Fatalf("acknowledged first request was not stale: %v", err)
 			}
 		})
 	}

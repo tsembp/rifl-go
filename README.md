@@ -20,13 +20,20 @@ memory between Go processes, inspired by CXL-SHM, is a possible later extension.
 - Random 128-bit client IDs and monotonically increasing request sequences.
 - A client wrapper that reconnects and retries the same request on transport
   failures and per-attempt timeouts, bounded by a caller-provided context.
+- Client-side tracking of the lowest unfinished sequence (`FirstIncomplete`),
+  piggybacked on requests as an acknowledgement of all lower sequences.
 - Server-side duplicate suppression and replay of the original result, including
   counter-overflow errors. Reusing an ID with different arguments is rejected.
 - A bbolt-backed counter that commits the mutation and completion record together,
   preserving duplicate protection and original results across server restarts.
+- Durable per-client acknowledgement boundaries, atomic completion-record
+  reclamation, and stale-request rejection after records have been deleted.
 - The original in-memory counter, retained for comparison and tests.
 - Tests over loopback TCP, including lost responses, concurrent duplicates,
   database reopen, and abrupt server-process termination at transaction boundaries.
+- A durable retry-only baseline plus a reproducible benchmark runner and SVG
+  plotter for throughput, tail latency, duplicate effects, metadata, database size,
+  retry rates, payload sizes, client scale, acknowledgement batches, and outages.
 
 ### Guarantee and limitations
 
@@ -44,9 +51,16 @@ The zero-value `Counter` still uses memory only and loses everything on restart;
 
 A request is identified by `(ClientID, Sequence)`. Retrying that ID with the same
 arguments returns its original result even after other requests change the
-counter. A timeout or cancellation does not undo an operation: its outcome can
-remain unknown. Retain the same request object if you need to retry afterward.
-Calling `NewRequest` again creates another logical operation.
+counter, provided the client has not acknowledged receiving that result. A timeout
+or cancellation does not undo an operation: its outcome can remain unknown. Retain
+the same request object if you need to retry afterward. Calling `NewRequest` again
+creates another logical operation.
+
+When a definitive reply arrives, the client marks that sequence complete. Each
+attempt carries the lowest still-unfinished sequence; all lower requests are
+therefore acknowledged. The server advances this boundary monotonically and
+deletes lower completion records in the same bbolt transaction. A delayed request
+below the durable boundary is rejected as stale, including after server restart.
 
 Clients must retain the original request ID and arguments across retries, including
 after server restarts. The client CLI creates a new ID on every invocation; it is
@@ -55,11 +69,15 @@ are remembered, while storage errors remain retryable/ambiguous rather than bein
 treated as definitive rejections. A storage error is signaled with the reserved
 `storage outcome unknown: ` RPC error prefix.
 
-Completion records currently grow without bound. Acknowledgement
-tracking, garbage collection, client leases, financial workloads,
-and performance experiments are future work. No CXL hardware or emulation is
-implemented yet. The client opens one TCP connection per attempt for simplicity;
-this is not an optimized networking baseline.
+An allocated request that never receives a definitive reply prevents the boundary
+from advancing past it, so later completion records remain safe. Per-client
+acknowledgement boundaries are retained indefinitely because client leases and
+crash cleanup are not implemented. The final completion for an idle client also
+remains until a later request carries its acknowledgement. The benchmark tooling
+is implemented, but final reported measurements still need to be collected under
+controlled conditions. Financial workloads are future work. No CXL hardware or
+emulation is implemented yet. The client and benchmark open one TCP connection per
+attempt for simplicity; this is not an optimized transport baseline.
 
 ## Run
 
@@ -77,9 +95,9 @@ In another terminal:
 go run ./cmd/client -addr 127.0.0.1:9000 -delta 10
 ```
 
-The demo sends the **same request twice**. On a fresh server both replies show
-`10`, and the counter is incremented once. Each new invocation of the CLI creates
-a new client identity and therefore a new logical operation.
+The demo sends one request successfully, then deliberately sends it again after
+its reply was acknowledged. The second call is rejected as stale and the counter
+is incremented once. Each new CLI invocation creates a new client identity.
 
 Restarting the server with the same `-db` path preserves the counter and results.
 Do not delete the database to recover a failed server: doing so also deletes the
@@ -94,20 +112,35 @@ go test -race ./...
 go vet ./...
 ```
 
-The tests verify lost-response retry, original-result replay, concurrent duplicate
-and unique requests, request validation, conflicting ID reuse, remembered overflow
-errors, timeout retries, and cancellation. Storage tests also verify original
-results and errors after reopen, recovery before/after commit using a subprocess
-that exits without closing its database, and ambiguous storage failures. They
-do not simulate power loss or substitute for a formal correctness proof.
+The tests verify lost-response retry, original-result replay before acknowledgement,
+concurrent duplicate and unique requests, out-of-order client completion, request
+validation, stale rejection, monotonic acknowledgement boundaries, remembered
+overflow errors, timeout retries, and cancellation. Storage tests also verify
+reclamation and stale protection across reopen, migration of existing databases,
+recovery before/after mutation and acknowledgement commits using a subprocess,
+and ambiguous storage failures. They do not simulate power loss or replace a
+formal correctness proof.
+
+## Benchmark
+
+The server accepts `-mode protected` (default) or `-mode baseline`. The benchmark
+client supports normal, response-loss simulation, duplicate-heavy, configurable
+retry-rate, acknowledgement/GC, batched acknowledgement, blocked-gap, restart,
+and transport-retry workloads. It supports fixed-duration runs, separate
+worker/logical-client counts, payload sweeps, raw per-request latency, and
+one-second timelines. `cmd/benchplot` turns summary rows into an SVG comparison.
+
+Use a laptop for smoke tests and CloudLab for final controlled measurements. The
+full fairness rules, scenario matrix, commands, restart procedure, output schema,
+and interpretation guidance are in [BENCHMARKS.md](BENCHMARKS.md). A three-node
+bare-metal profile and native deployment workflow are in
+[cloudlab/README.md](cloudlab/README.md); Docker is not required.
 
 ## Next steps
 
-1. Add acknowledgements and safe record reclamation, preserving stale-request
-   detection after results are removed.
-2. Evaluate equivalent unprotected and protected RPC workloads under the same
-   transport and storage configuration.
-3. Add a small financial demonstration; consider a shared-memory transport if
+1. Instantiate the supplied CloudLab profile, run the documented benchmark matrix,
+   and analyze the aggregate, raw-latency, timeline, and node-metric CSV files.
+2. Add a small financial demonstration; consider a shared-memory transport if
    time permits and the instructor confirms its scope.
 
 ## References

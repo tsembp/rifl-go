@@ -25,10 +25,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	replayed, err := client.Add(ctx, req)
-	if err != nil {
-		log.Fatal(err)
+	_, staleErr := client.Add(ctx, req)
+	if staleErr == nil {
+		log.Fatal("acknowledged request was unexpectedly accepted")
 	}
-	fmt.Printf("Request %s/%d: first=%d, same request again=%d\n",
-		req.ID.ClientID, req.ID.Sequence, first.Value, replayed.Value)
+	fmt.Printf("Request %s/%d: result=%d, acknowledged retry=%v\n",
+		req.ID.ClientID, req.ID.Sequence, first.Value, staleErr)
 }

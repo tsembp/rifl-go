@@ -1,2 +1,8 @@
 # Local counter database; tests use temporary directories.
 /rifl.db
+/dist/
+/results/
+/.idea/
+/graphify-out/
+/Project_Midterm_Status_Report.docx
+__pycache__/
