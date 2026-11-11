@@ -1,0 +1,23 @@
+[
+  {
+    "variant": "baseline",
+    "points": 25,
+    "raw_samples": 764894,
+    "sample_counts_match": true,
+    "p99_recomputed_from_raw": true
+  },
+  {
+    "variant": "original",
+    "points": 25,
+    "raw_samples": 530878,
+    "sample_counts_match": true,
+    "p99_recomputed_from_raw": true
+  },
+  {
+    "variant": "optimized",
+    "points": 25,
+    "raw_samples": 643317,
+    "sample_counts_match": true,
+    "p99_recomputed_from_raw": true
+  }
+]

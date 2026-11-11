@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Last updated: 10 November 2026
+Last updated: 11 November 2026
 
 ## Project objective
 
@@ -99,35 +99,43 @@ Main findings:
 - With four workers and 1,024 logical clients, throughput was 2,227.6 ops/s for
   the baseline and 372.0 ops/s for the protected server.
 
-The last result exposes the main performance problem. `processPersistentAck` in
-`store.go` scans the entire shared `completions-v1` bucket and JSON-decodes every
-request key to find records for one client. Its cost therefore grows with total
-active-client metadata rather than with that client's acknowledged records.
+The last result exposed a scan bottleneck in commit 6a50b38: processPersistentAck
+walked the entire shared completions-v1 bucket and JSON-decoded every request key.
+The current change uses per-client buckets. Paired client-count and fixed-client
+concurrency sweeps, with raw data and verification, are in benchmark-results/README.md.
+The first sweep improves 1,024-client throughput by 2.70x but regresses at four
+clients. Preserve this trade-off rather than claiming a universal speedup.
 
 ## Next work
 
-### 1. Remove the acknowledgement scan bottleneck
+### 1. Profile remaining overhead and finish GC evaluation
 
-Change completion storage so one client's acknowledgement only visits that
-client's records. A practical bbolt layout is a top-level completion bucket with
-one nested bucket per client and sequence numbers encoded as ordered 8-byte
-big-endian keys. Another acceptable design is a separate per-client index that
-points to the existing completion keys.
+Implemented: completions-v2 has one nested bucket per client, with ordered 8-byte
+big-endian sequence keys. Durable GC only visits that client's reclaimable records.
+The RPC protocol and JSON completion values are unchanged. The in-memory counter
+retains its original map-based implementation.
 
-The change must include:
+The change includes:
 
-- an explicit database schema/version and migration or compatibility strategy
-  for existing `completions-v1` databases;
+- schema version 2 and atomic migration of both older unversioned layouts;
 - atomic lookup, insertion, acknowledgement advancement, and deletion;
 - correct `Stats` accounting across nested buckets or the new index;
 - tests for migration, duplicate replay, stale protection, crash boundaries,
   blocked gaps, and multiple clients;
-- no weakening of any invariant listed above.
+- unchanged durability settings and invariants listed above.
 
-After the change, rerun at minimum:
+Review store.go, schema.go, gc_test.go, schema_test.go and the adapted store_test.go.
+The maintainers authorized the paired client-count and concurrency measurements.
+The concurrency sweep keeps 64 clients fixed while varying workers, so it differs
+from the old experiment where worker and client counts increased together.
+
+Completed paired sweeps:
 
 - active clients: 4, 16, 64, 256, and 1,024 with four workers;
-- concurrency: 1, 4, 16, 32, and 64 workers;
+- concurrency: 1, 4, 16, 32, and 64 workers with 64 fixed clients.
+
+Remaining measurements:
+
 - acknowledgement/GC and blocked-gap scenarios;
 - batch acknowledgement at 100, 1,000, and 10,000 records.
 
@@ -162,11 +170,10 @@ future work and retain the limitations in `EXPERIMENT_RESULTS.md`.
 
 ## Repository state at handoff
 
-The working tree contains a large set of modified and untracked project files;
-the implementation and experiment work has not yet been committed as one clean
-snapshot. Review `git status` before staging. In particular, `.idea/`, local
-generated graph data, Word reports, databases, binaries, and raw benchmark output
-should only be committed if intentionally part of the repository.
+Spyros's implementation and experiment tooling are committed in 6a50b38. The new
+per-client GC work and README clarification are left uncommitted for review.
+Review git status before staging; leave IDE files, databases and generated
+benchmark outputs alone unless explicitly requested.
 
 Do not commit, push, add dependencies, or change the project scope without the
 maintainers' approval.

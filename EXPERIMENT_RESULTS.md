@@ -1,5 +1,11 @@
 # CloudLab experiment results
 
+These are historical measurements of the flat `completions-v1` implementation
+in commit `6a50b38`. Paired before/after measurements of the new per-client
+`completions-v2` layout, including raw data, are linked from
+[benchmark-results/README.md](benchmark-results/README.md). Keep these historical
+tables separate: the newer runs use Ubuntu 24.04 and a longer warmup.
+
 These results were collected on three CloudLab `d430` bare-metal nodes running
 Ubuntu 22.04 on November 1–2, 2026. The server and client communicated over the
 private LAN. Performance runs used persistent TCP connections per worker, bbolt's

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -116,15 +115,8 @@ func persistentClientState(t *testing.T, c *PersistentCounter, clientID string) 
 		if err != nil {
 			return err
 		}
-		cursor := tx.Bucket(resultsBucket).Cursor()
-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
-			var id RequestID
-			if err := json.Unmarshal(key, &id); err != nil {
-				return err
-			}
-			if id.ClientID == clientID {
-				count++
-			}
+		if records := tx.Bucket(resultsBucket).Bucket([]byte(clientID)); records != nil {
+			count = records.Stats().KeyN
 		}
 		return nil
 	})
@@ -201,7 +193,7 @@ func TestOpenCounterMigratesAcknowledgementBucket(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.CreateBucket(resultsBucket); err != nil {
+		if _, err := tx.CreateBucket(legacyResultsBucket); err != nil {
 			return err
 		}
 		var value [8]byte

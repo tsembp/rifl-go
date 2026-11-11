@@ -1,0 +1,386 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 1c86fe6..712cee3 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -14,6 +14,14 @@ outside the current implementation.
+   state belongs to the service, not the TCP connection.
+ - store.go provides PersistentCounter via OpenCounter(path). The server CLI uses
+   this durable implementation by default, with a configurable -db path.
++- Durable completions use completions-v2/<client ID>/<8-byte big-endian sequence>.
++  GC visits only the target client's bucket and stops at FirstIncomplete. Saved
++  completion values remain JSON; the in-memory Counter still uses its original map.
++- schema.go creates version 2 or atomically migrates unversioned completions-v1
++  databases. Preserve saved bytes, counter state and durable boundaries. Update
++  schema tests for storage changes; old binaries cannot read upgraded databases.
++- Stats must count completion entries inside client buckets, not the buckets
++  themselves. ClientBoundaries still counts only durable boundary entries.
+ - baseline.go provides the durable retry-only UnprotectedCounter used solely as
+   the fair comparison baseline. cmd/bench generates CSV and cmd/benchplot creates
+   dependency-free SVG summaries; see BENCHMARKS.md for experiment rules.
+@@ -50,6 +58,10 @@ remain until leases are implemented. Test-only hooks in PersistentCounter allow
+ subprocess termination before commit and after commit before response; never
+ expose them as production RPC controls.
+ 
++EXPERIMENT_RESULTS.md describes the old flat-layout measurements. The per-client
++optimization is implemented but awaits code review and new performance runs;
++do not claim a speedup or replace the historical measurements without evidence.
++
+ The lost-response test wraps a server connection and fails its response write
+ after net/rpc has executed the handler. Keep this test exercising a real RPC
+ connection, not just invoking the counter directly.
+diff --git a/AGENT_HANDOFF.md b/AGENT_HANDOFF.md
+index f865916..aa0ee90 100644
+--- a/AGENT_HANDOFF.md
++++ b/AGENT_HANDOFF.md
+@@ -1,6 +1,6 @@
+ # Agent Handoff
+ 
+-Last updated: 10 November 2026
++Last updated: 11 November 2026
+ 
+ ## Project objective
+ 
+@@ -99,30 +99,30 @@ Main findings:
+ - With four workers and 1,024 logical clients, throughput was 2,227.6 ops/s for
+   the baseline and 372.0 ops/s for the protected server.
+ 
+-The last result exposes the main performance problem. `processPersistentAck` in
+-`store.go` scans the entire shared `completions-v1` bucket and JSON-decodes every
+-request key to find records for one client. Its cost therefore grows with total
+-active-client metadata rather than with that client's acknowledged records.
++The last result exposed a scan bottleneck in commit 6a50b38: processPersistentAck
++walked the entire shared completions-v1 bucket and JSON-decoded every request key.
++The current change uses per-client buckets; performance has not yet been measured.
+ 
+ ## Next work
+ 
+-### 1. Remove the acknowledgement scan bottleneck
++### 1. Review and benchmark the per-client GC change
+ 
+-Change completion storage so one client's acknowledgement only visits that
+-client's records. A practical bbolt layout is a top-level completion bucket with
+-one nested bucket per client and sequence numbers encoded as ordered 8-byte
+-big-endian keys. Another acceptable design is a separate per-client index that
+-points to the existing completion keys.
++Implemented: completions-v2 has one nested bucket per client, with ordered 8-byte
++big-endian sequence keys. Durable GC only visits that client's reclaimable records.
++The RPC protocol and JSON completion values are unchanged. The in-memory counter
++retains its original map-based implementation.
+ 
+-The change must include:
++The change includes:
+ 
+-- an explicit database schema/version and migration or compatibility strategy
+-  for existing `completions-v1` databases;
++- schema version 2 and atomic migration of both older unversioned layouts;
+ - atomic lookup, insertion, acknowledgement advancement, and deletion;
+ - correct `Stats` accounting across nested buckets or the new index;
+ - tests for migration, duplicate replay, stale protection, crash boundaries,
+   blocked gaps, and multiple clients;
+-- no weakening of any invariant listed above.
++- unchanged durability settings and invariants listed above.
++
++Review store.go, schema.go, gc_test.go, schema_test.go and the adapted store_test.go.
++Do not rerun performance matrices until the maintainers finish code review.
+ 
+ After the change, rerun at minimum:
+ 
+@@ -162,11 +162,10 @@ future work and retain the limitations in `EXPERIMENT_RESULTS.md`.
+ 
+ ## Repository state at handoff
+ 
+-The working tree contains a large set of modified and untracked project files;
+-the implementation and experiment work has not yet been committed as one clean
+-snapshot. Review `git status` before staging. In particular, `.idea/`, local
+-generated graph data, Word reports, databases, binaries, and raw benchmark output
+-should only be committed if intentionally part of the repository.
++Spyros's implementation and experiment tooling are committed in 6a50b38. The new
++per-client GC work and README clarification are left uncommitted for review.
++Review git status before staging; leave IDE files, databases and generated
++benchmark outputs alone unless explicitly requested.
+ 
+ Do not commit, push, add dependencies, or change the project scope without the
+ maintainers' approval.
+diff --git a/EXPERIMENT_RESULTS.md b/EXPERIMENT_RESULTS.md
+index 53affc7..66d6c11 100644
+--- a/EXPERIMENT_RESULTS.md
++++ b/EXPERIMENT_RESULTS.md
+@@ -1,5 +1,10 @@
+ # CloudLab experiment results
+ 
++These are historical measurements of the flat `completions-v1` implementation
++in commit `6a50b38`. The new per-client `completions-v2` layout has correctness
++tests but has not yet been performance-benchmarked. Keep these tables for the
++planned before/after comparison.
++
+ These results were collected on three CloudLab `d430` bare-metal nodes running
+ Ubuntu 22.04 on November 1–2, 2026. The server and client communicated over the
+ private LAN. Performance runs used persistent TCP connections per worker, bbolt's
+diff --git a/README.md b/README.md
+index 242a99a..245098c 100644
+--- a/README.md
++++ b/README.md
+@@ -28,6 +28,8 @@ memory between Go processes, inspired by CXL-SHM, is a possible later extension.
+   preserving duplicate protection and original results across server restarts.
+ - Durable per-client acknowledgement boundaries, atomic completion-record
+   reclamation, and stale-request rejection after records have been deleted.
++- Per-client completion buckets with ordered binary sequence keys, so durable GC
++  visits only the acknowledging client's records below its boundary.
+ - The original in-memory counter, retained for comparison and tests.
+ - Tests over loopback TCP, including lost responses, concurrent duplicates,
+   database reopen, and abrupt server-process termination at transaction boundaries.
+@@ -74,10 +76,67 @@ from advancing past it, so later completion records remain safe. Per-client
+ acknowledgement boundaries are retained indefinitely because client leases and
+ crash cleanup are not implemented. The final completion for an idle client also
+ remains until a later request carries its acknowledgement. The benchmark tooling
+-is implemented, but final reported measurements still need to be collected under
+-controlled conditions. Financial workloads are future work. No CXL hardware or
+-emulation is implemented yet. The client and benchmark open one TCP connection per
+-attempt for simplicity; this is not an optimized transport baseline.
++is implemented; results for the previous flat completion layout are recorded in
++[EXPERIMENT_RESULTS.md](EXPERIMENT_RESULTS.md). Performance of the new per-client
++layout has not been measured yet. Financial workloads are future work. No CXL
++hardware or emulation is implemented yet. The application client opens one TCP
++connection per attempt; the benchmark also supports persistent worker connections.
++
++### Completion storage and migration
++
++The persistent service uses this layout:
++
++```text
++state-v1/
++  counter         -> current value
++  schema-version  -> 2
++clients-v1/
++  client ID       -> durable FirstIncomplete boundary
++completions-v2/
++  client ID/
++    sequence      -> saved Delta, Reply and Error (JSON)
++```
++
++Sequences are encoded as 8-byte big-endian unsigned integers. This makes bbolt's
++key order match numerical sequence order, including across 255/256. An advancing
++ACK visits only that client's bucket, deletes sequences below FirstIncomplete,
++and stops at the first retained sequence. Duplicate lookup uses the same bucket
++and sequence key. The saved result format and RPC protocol are unchanged.
++The in-memory Counter retains its original map-based implementation.
++
++OpenCounter automatically upgrades either previous unversioned completions-v1
++layout, including databases created before acknowledgements were added. Migration
++copies the original saved results, preserves the counter and client boundaries,
++removes the old bucket, and records version 2 in one transaction. An error or
++process crash before commit leaves the old schema; after commit the new schema
++is complete. Unsupported schema versions are rejected.
++
++Stop the old server and back up its database before the first upgraded startup.
++An upgraded database cannot be opened by the old binary; there is no automatic
++downgrade. Migration may take time proportional to retained completion records.
++GC, boundary advancement, and the incoming mutation/result still share one
++transaction. Boundaries are not evicted, and sync settings remain unchanged.
++
++### Recovery, failover, and the shared-memory study
++
++The instructor confirmed that cross-server failover may remain a documented
++limitation of the message-based RIFL-inspired implementation. Current recovery
++means restarting the server with the same local database. bbolt does not provide
++replication, leader election, or automatic takeover by another machine.
++
++The shared-memory phase will study how a replacement process or compute node
++could access surviving application state, completion records, and acknowledgement
++boundaries. Shared state alone does not provide safe takeover: ownership and
++failure handling must ensure that only one active server modifies the database.
++
++As suggested by the instructor, bbolt could remain the storage layer if a suitable
++filesystem exposes files backed by CXL memory. This is a conditional architectural
++option, not an implemented feature. It requires filesystem, memory-mapping,
++locking, ordering, and synchronization semantics compatible with bbolt. CXL memory
++is not inherently persistent across power loss. A CXL-backed database file and
++shared-memory RPC request/reply queues are separate design choices; their recovery
++assumptions must be evaluated explicitly. Building such a filesystem is outside
++this project's scope.
+ 
+ ## Run
+ 
+@@ -118,7 +177,10 @@ validation, stale rejection, monotonic acknowledgement boundaries, remembered
+ overflow errors, timeout retries, and cancellation. Storage tests also verify
+ reclamation and stale protection across reopen, migration of existing databases,
+ recovery before/after mutation and acknowledgement commits using a subprocess,
+-and ambiguous storage failures. They do not simulate power loss or replace a
++and ambiguous storage failures. New storage tests cover both legacy migrations,
++rollback and process crashes during migration, original-result/error preservation,
++cross-client isolation, numeric key order, multi-page GC, and nested record counts.
++They do not simulate power loss or replace a
+ formal correctness proof.
+ 
+ ## Benchmark
+@@ -138,8 +200,10 @@ bare-metal profile and native deployment workflow are in
+ 
+ ## Next steps
+ 
+-1. Instantiate the supplied CloudLab profile, run the documented benchmark matrix,
+-   and analyze the aggregate, raw-latency, timeline, and node-metric CSV files.
++1. Review the per-client GC change, then rerun the same CloudLab client-count,
++   concurrency, and GC matrices against the old flat layout. Preserve the old
++   results and compare medians and p99 under the same durability and transport
++   settings. No speedup is claimed before this comparison.
+ 2. Add a small financial demonstration; consider a shared-memory transport if
+    time permits and the instructor confirms its scope.
+ 
+diff --git a/store.go b/store.go
+index 3653dad..d999f6a 100644
+--- a/store.go
++++ b/store.go
+@@ -15,7 +15,7 @@ const storageErrorPrefix = "storage outcome unknown: "
+ 
+ var (
+ 	stateBucket   = []byte("state-v1")
+-	resultsBucket = []byte("completions-v1")
++	resultsBucket = []byte("completions-v2")
+ 	clientsBucket = []byte("clients-v1")
+ 	valueKey      = []byte("counter")
+ )
+@@ -44,25 +44,7 @@ func OpenCounter(path string) (*PersistentCounter, error) {
+ 	if err != nil {
+ 		return nil, fmt.Errorf("open counter database: %w", err)
+ 	}
+-	err = db.Update(func(tx *bolt.Tx) error {
+-		state, results := tx.Bucket(stateBucket), tx.Bucket(resultsBucket)
+-		if state == nil && results == nil {
+-			state, err = tx.CreateBucket(stateBucket)
+-			if err != nil {
+-				return err
+-			}
+-			if _, err := tx.CreateBucket(resultsBucket); err != nil {
+-				return err
+-			}
+-			if err := state.Put(valueKey, make([]byte, 8)); err != nil {
+-				return err
+-			}
+-		} else if state == nil || results == nil || len(state.Get(valueKey)) != 8 {
+-			return errors.New("invalid counter database schema")
+-		}
+-		_, err = tx.CreateBucketIfNotExists(clientsBucket)
+-		return err
+-	})
++	err = db.Update(initializeCounterSchema)
+ 	if err != nil {
+ 		db.Close()
+ 		return nil, fmt.Errorf("initialize counter database: %w", err)
+@@ -76,16 +58,12 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 	if err := validateAddRequest(req); err != nil {
+ 		return err
+ 	}
+-	// JSON encodes the pair unambiguously even if client IDs contain separators.
+-	key, err := json.Marshal(req.ID)
+-	if err != nil {
+-		return err
+-	}
++	key := sequenceKey(req.ID.Sequence)
+ 	var result diskCompletion
+ 	var applicationErr error
+ 	committedWrite := false
+-	err = c.db.Update(func(tx *bolt.Tx) error {
+-		state, results := tx.Bucket(stateBucket), tx.Bucket(resultsBucket)
++	err := c.db.Update(func(tx *bolt.Tx) error {
++		state := tx.Bucket(stateBucket)
+ 		firstIncomplete, advanced, err := processPersistentAck(tx, req.ID.ClientID, req.FirstIncomplete)
+ 		if err != nil {
+ 			return err
+@@ -98,7 +76,11 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 			}
+ 			return nil
+ 		}
+-		if data := results.Get(key); data != nil {
++		results, err := tx.Bucket(resultsBucket).CreateBucketIfNotExists([]byte(req.ID.ClientID))
++		if err != nil {
++			return err
++		}
++		if data := results.Get(key[:]); data != nil {
+ 			if err := json.Unmarshal(data, &result); err != nil {
+ 				return err
+ 			}
+@@ -124,7 +106,7 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		if err := results.Put(key, data); err != nil {
++		if err := results.Put(key[:], data); err != nil {
+ 			return err
+ 		}
+ 		committedWrite = true
+@@ -162,13 +144,14 @@ func processPersistentAck(tx *bolt.Tx, clientID string, incoming uint64) (uint64
+ 	if err := clients.Put([]byte(clientID), encoded[:]); err != nil {
+ 		return 0, false, err
+ 	}
+-	cursor := tx.Bucket(resultsBucket).Cursor()
+-	for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+-		var id RequestID
+-		if err := json.Unmarshal(key, &id); err != nil {
+-			return 0, false, err
+-		}
+-		if id.ClientID == clientID && id.Sequence < incoming {
++	// Visit only this client's ordered sequence keys, stopping at the boundary.
++	results := tx.Bucket(resultsBucket).Bucket([]byte(clientID))
++	if results != nil {
++		cursor := results.Cursor()
++		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
++			if binary.BigEndian.Uint64(key) >= incoming {
++				break
++			}
+ 			if err := cursor.Delete(); err != nil {
+ 				return 0, false, err
+ 			}
+@@ -210,7 +193,13 @@ func (c *PersistentCounter) Stats(_ struct{}, reply *ServiceStats) error {
+ 	reply.Protected = true
+ 	err := c.db.View(func(tx *bolt.Tx) error {
+ 		reply.Value = int64(binary.BigEndian.Uint64(tx.Bucket(stateBucket).Get(valueKey)))
+-		reply.CompletionRecords = tx.Bucket(resultsBucket).Stats().KeyN
++		reply.CompletionRecords = 0
++		if err := tx.Bucket(resultsBucket).ForEach(func(client, _ []byte) error {
++			reply.CompletionRecords += tx.Bucket(resultsBucket).Bucket(client).Stats().KeyN
++			return nil
++		}); err != nil {
++			return err
++		}
+ 		reply.ClientBoundaries = tx.Bucket(clientsBucket).Stats().KeyN
+ 		return nil
+ 	})
+diff --git a/store_test.go b/store_test.go
+index 0701b06..8191c00 100644
+--- a/store_test.go
++++ b/store_test.go
+@@ -5,7 +5,6 @@ import (
+ 	"bytes"
+ 	"context"
+ 	"encoding/binary"
+-	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"math"
+@@ -116,15 +115,8 @@ func persistentClientState(t *testing.T, c *PersistentCounter, clientID string)
+ 		if err != nil {
+ 			return err
+ 		}
+-		cursor := tx.Bucket(resultsBucket).Cursor()
+-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+-			var id RequestID
+-			if err := json.Unmarshal(key, &id); err != nil {
+-				return err
+-			}
+-			if id.ClientID == clientID {
+-				count++
+-			}
++		if records := tx.Bucket(resultsBucket).Bucket([]byte(clientID)); records != nil {
++			count = records.Stats().KeyN
+ 		}
+ 		return nil
+ 	})
+@@ -201,7 +193,7 @@ func TestOpenCounterMigratesAcknowledgementBucket(t *testing.T) {
+ 		if err != nil {
+ 			return err
+ 		}
+-		if _, err := tx.CreateBucket(resultsBucket); err != nil {
++		if _, err := tx.CreateBucket(legacyResultsBucket); err != nil {
+ 			return err
+ 		}
+ 		var value [8]byte

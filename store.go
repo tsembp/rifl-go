@@ -15,7 +15,7 @@ const storageErrorPrefix = "storage outcome unknown: "
 
 var (
 	stateBucket   = []byte("state-v1")
-	resultsBucket = []byte("completions-v1")
+	resultsBucket = []byte("completions-v2")
 	clientsBucket = []byte("clients-v1")
 	valueKey      = []byte("counter")
 )
@@ -44,25 +44,7 @@ func OpenCounter(path string) (*PersistentCounter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open counter database: %w", err)
 	}
-	err = db.Update(func(tx *bolt.Tx) error {
-		state, results := tx.Bucket(stateBucket), tx.Bucket(resultsBucket)
-		if state == nil && results == nil {
-			state, err = tx.CreateBucket(stateBucket)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.CreateBucket(resultsBucket); err != nil {
-				return err
-			}
-			if err := state.Put(valueKey, make([]byte, 8)); err != nil {
-				return err
-			}
-		} else if state == nil || results == nil || len(state.Get(valueKey)) != 8 {
-			return errors.New("invalid counter database schema")
-		}
-		_, err = tx.CreateBucketIfNotExists(clientsBucket)
-		return err
-	})
+	err = db.Update(initializeCounterSchema)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize counter database: %w", err)
@@ -76,16 +58,12 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 	if err := validateAddRequest(req); err != nil {
 		return err
 	}
-	// JSON encodes the pair unambiguously even if client IDs contain separators.
-	key, err := json.Marshal(req.ID)
-	if err != nil {
-		return err
-	}
+	key := sequenceKey(req.ID.Sequence)
 	var result diskCompletion
 	var applicationErr error
 	committedWrite := false
-	err = c.db.Update(func(tx *bolt.Tx) error {
-		state, results := tx.Bucket(stateBucket), tx.Bucket(resultsBucket)
+	err := c.db.Update(func(tx *bolt.Tx) error {
+		state := tx.Bucket(stateBucket)
 		firstIncomplete, advanced, err := processPersistentAck(tx, req.ID.ClientID, req.FirstIncomplete)
 		if err != nil {
 			return err
@@ -98,7 +76,11 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 			}
 			return nil
 		}
-		if data := results.Get(key); data != nil {
+		results, err := tx.Bucket(resultsBucket).CreateBucketIfNotExists([]byte(req.ID.ClientID))
+		if err != nil {
+			return err
+		}
+		if data := results.Get(key[:]); data != nil {
 			if err := json.Unmarshal(data, &result); err != nil {
 				return err
 			}
@@ -124,7 +106,7 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 		if err != nil {
 			return err
 		}
-		if err := results.Put(key, data); err != nil {
+		if err := results.Put(key[:], data); err != nil {
 			return err
 		}
 		committedWrite = true
@@ -162,13 +144,14 @@ func processPersistentAck(tx *bolt.Tx, clientID string, incoming uint64) (uint64
 	if err := clients.Put([]byte(clientID), encoded[:]); err != nil {
 		return 0, false, err
 	}
-	cursor := tx.Bucket(resultsBucket).Cursor()
-	for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
-		var id RequestID
-		if err := json.Unmarshal(key, &id); err != nil {
-			return 0, false, err
-		}
-		if id.ClientID == clientID && id.Sequence < incoming {
+	// Visit only this client's ordered sequence keys, stopping at the boundary.
+	results := tx.Bucket(resultsBucket).Bucket([]byte(clientID))
+	if results != nil {
+		cursor := results.Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			if binary.BigEndian.Uint64(key) >= incoming {
+				break
+			}
 			if err := cursor.Delete(); err != nil {
 				return 0, false, err
 			}
@@ -210,7 +193,13 @@ func (c *PersistentCounter) Stats(_ struct{}, reply *ServiceStats) error {
 	reply.Protected = true
 	err := c.db.View(func(tx *bolt.Tx) error {
 		reply.Value = int64(binary.BigEndian.Uint64(tx.Bucket(stateBucket).Get(valueKey)))
-		reply.CompletionRecords = tx.Bucket(resultsBucket).Stats().KeyN
+		reply.CompletionRecords = 0
+		if err := tx.Bucket(resultsBucket).ForEach(func(client, _ []byte) error {
+			reply.CompletionRecords += tx.Bucket(resultsBucket).Bucket(client).Stats().KeyN
+			return nil
+		}); err != nil {
+			return err
+		}
 		reply.ClientBoundaries = tx.Bucket(clientsBucket).Stats().KeyN
 		return nil
 	})

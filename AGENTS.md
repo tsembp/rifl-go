@@ -14,6 +14,14 @@ outside the current implementation.
   state belongs to the service, not the TCP connection.
 - store.go provides PersistentCounter via OpenCounter(path). The server CLI uses
   this durable implementation by default, with a configurable -db path.
+- Durable completions use completions-v2/<client ID>/<8-byte big-endian sequence>.
+  GC visits only the target client's bucket and stops at FirstIncomplete. Saved
+  completion values remain JSON; the in-memory Counter still uses its original map.
+- schema.go creates version 2 or atomically migrates unversioned completions-v1
+  databases. Preserve saved bytes, counter state and durable boundaries. Update
+  schema tests for storage changes; old binaries cannot read upgraded databases.
+- Stats must count completion entries inside client buckets, not the buckets
+  themselves. ClientBoundaries still counts only durable boundary entries.
 - baseline.go provides the durable retry-only UnprotectedCounter used solely as
   the fair comparison baseline. cmd/bench generates CSV and cmd/benchplot creates
   dependency-free SVG summaries; see BENCHMARKS.md for experiment rules.
@@ -49,6 +57,13 @@ result, acknowledgement, and reclamation commits. Per-client durable boundaries
 remain until leases are implemented. Test-only hooks in PersistentCounter allow
 subprocess termination before commit and after commit before response; never
 expose them as production RPC controls.
+
+EXPERIMENT_RESULTS.md describes the old flat-layout measurements. The per-client
+optimization is implemented and paired client-count and fixed-client concurrency
+sweeps are saved under benchmark-results/README.md, including raw data and source
+snapshots. Preserve the four-client regression and repetition variability in
+reports; do not describe the optimization as a universal speedup or replace the
+historical tables. Further profiling and batch-GC measurements remain next work.
 
 The lost-response test wraps a server connection and fails its response write
 after net/rpc has executed the handler. Keep this test exercising a real RPC

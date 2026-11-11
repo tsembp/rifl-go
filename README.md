@@ -28,6 +28,8 @@ memory between Go processes, inspired by CXL-SHM, is a possible later extension.
   preserving duplicate protection and original results across server restarts.
 - Durable per-client acknowledgement boundaries, atomic completion-record
   reclamation, and stale-request rejection after records have been deleted.
+- Per-client completion buckets with ordered binary sequence keys, so durable GC
+  visits only the acknowledging client's records below its boundary.
 - The original in-memory counter, retained for comparison and tests.
 - Tests over loopback TCP, including lost responses, concurrent duplicates,
   database reopen, and abrupt server-process termination at transaction boundaries.
@@ -74,10 +76,69 @@ from advancing past it, so later completion records remain safe. Per-client
 acknowledgement boundaries are retained indefinitely because client leases and
 crash cleanup are not implemented. The final completion for an idle client also
 remains until a later request carries its acknowledgement. The benchmark tooling
-is implemented, but final reported measurements still need to be collected under
-controlled conditions. Financial workloads are future work. No CXL hardware or
-emulation is implemented yet. The client and benchmark open one TCP connection per
-attempt for simplicity; this is not an optimized transport baseline.
+is implemented; results for the previous flat completion layout are recorded in
+[EXPERIMENT_RESULTS.md](EXPERIMENT_RESULTS.md). Performance of the new per-client
+layout is evaluated in the paired runs under [benchmark-results](benchmark-results/README.md),
+including raw data and environment/source provenance. It improves scaling at high
+client counts but regresses at four clients. Financial workloads are future work. No CXL
+hardware or emulation is implemented yet. The application client opens one TCP
+connection per attempt; the benchmark also supports persistent worker connections.
+
+### Completion storage and migration
+
+The persistent service uses this layout:
+
+```text
+state-v1/
+  counter         -> current value
+  schema-version  -> 2
+clients-v1/
+  client ID       -> durable FirstIncomplete boundary
+completions-v2/
+  client ID/
+    sequence      -> saved Delta, Reply and Error (JSON)
+```
+
+Sequences are encoded as 8-byte big-endian unsigned integers. This makes bbolt's
+key order match numerical sequence order, including across 255/256. An advancing
+ACK visits only that client's bucket, deletes sequences below FirstIncomplete,
+and stops at the first retained sequence. Duplicate lookup uses the same bucket
+and sequence key. The saved result format and RPC protocol are unchanged.
+The in-memory Counter retains its original map-based implementation.
+
+OpenCounter automatically upgrades either previous unversioned completions-v1
+layout, including databases created before acknowledgements were added. Migration
+copies the original saved results, preserves the counter and client boundaries,
+removes the old bucket, and records version 2 in one transaction. An error or
+process crash before commit leaves the old schema; after commit the new schema
+is complete. Unsupported schema versions are rejected.
+
+Stop the old server and back up its database before the first upgraded startup.
+An upgraded database cannot be opened by the old binary; there is no automatic
+downgrade. Migration may take time proportional to retained completion records.
+GC, boundary advancement, and the incoming mutation/result still share one
+transaction. Boundaries are not evicted, and sync settings remain unchanged.
+
+### Recovery, failover, and the shared-memory study
+
+The instructor confirmed that cross-server failover may remain a documented
+limitation of the message-based RIFL-inspired implementation. Current recovery
+means restarting the server with the same local database. bbolt does not provide
+replication, leader election, or automatic takeover by another machine.
+
+The shared-memory phase will study how a replacement process or compute node
+could access surviving application state, completion records, and acknowledgement
+boundaries. Shared state alone does not provide safe takeover: ownership and
+failure handling must ensure that only one active server modifies the database.
+
+As suggested by the instructor, bbolt could remain the storage layer if a suitable
+filesystem exposes files backed by CXL memory. This is a conditional architectural
+option, not an implemented feature. It requires filesystem, memory-mapping,
+locking, ordering, and synchronization semantics compatible with bbolt. CXL memory
+is not inherently persistent across power loss. A CXL-backed database file and
+shared-memory RPC request/reply queues are separate design choices; their recovery
+assumptions must be evaluated explicitly. Building such a filesystem is outside
+this project's scope.
 
 ## Run
 
@@ -118,7 +179,10 @@ validation, stale rejection, monotonic acknowledgement boundaries, remembered
 overflow errors, timeout retries, and cancellation. Storage tests also verify
 reclamation and stale protection across reopen, migration of existing databases,
 recovery before/after mutation and acknowledgement commits using a subprocess,
-and ambiguous storage failures. They do not simulate power loss or replace a
+and ambiguous storage failures. New storage tests cover both legacy migrations,
+rollback and process crashes during migration, original-result/error preservation,
+cross-client isolation, numeric key order, multi-page GC, and nested record counts.
+They do not simulate power loss or replace a
 formal correctness proof.
 
 ## Benchmark
@@ -138,8 +202,9 @@ bare-metal profile and native deployment workflow are in
 
 ## Next steps
 
-1. Instantiate the supplied CloudLab profile, run the documented benchmark matrix,
-   and analyze the aggregate, raw-latency, timeline, and node-metric CSV files.
+1. Profile the four-client regression and complete paired batch-GC/blocked-gap
+   experiments. The client-count and fixed-client concurrency sweeps are saved in
+   benchmark-results; preserve those results before making further changes.
 2. Add a small financial demonstration; consider a shared-memory transport if
    time permits and the instructor confirms its scope.
 

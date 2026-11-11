@@ -1,0 +1,46 @@
+{
+  "run": "concurrency-20261111-qwUdyA",
+  "base_commit": "6a50b38ed54ec2c8602893a0c42cb47b1879e076",
+  "optimized": "uncommitted source snapshot in new-source.tar.gz",
+  "compiler": "go version go1.27.0 linux/amd64",
+  "buildvcs": false,
+  "cgo": false,
+  "binary_sha256": {
+    "benchplot": "41bdf6ebbe84a9d813dbb240e05d3d65a3e380730b35e70a37f9cc1b8706c84b",
+    "bench": "eaa66444cdaaf7b029a2164b84ab246f68e2a776baacee793deb10d779619f7f",
+    "server-new": "673861c4b7f024810b8b6527c993b465d6d2d0dff995226c528d4c72ddd503f9",
+    "server-old": "100c18ba1f44a7e3df38cdef671bedce7c814996c6149536ed293a85741d1fca"
+  },
+  "server": "tsembp@pc713.emulab.net",
+  "client": "tsembp@pc708.emulab.net",
+  "controller": "tsembp@pc705.emulab.net",
+  "private_server": "10.10.1.1:9000",
+  "duration_seconds": 15,
+  "repeats": 5,
+  "concurrency": [
+    1,
+    4,
+    16,
+    32,
+    64
+  ],
+  "virtual_clients": 64,
+  "payload_bytes": 100,
+  "warmup": 2048,
+  "connection_mode": "persistent",
+  "storage_sync": "bbolt defaults",
+  "note": "Fixed 64 logical clients isolates in-flight concurrency from client-count growth.",
+  "family": "concurrency",
+  "previous_run": "gc-20261111-QtN7Qx",
+  "variant_order": "cyclic rotation by worker count and repeat",
+  "fresh_database_per_point": true,
+  "reused_binary_directory": "/tmp/gc-20261111-QtN7Qx",
+  "interruptions": [
+    {
+      "utc": "2026-11-11T09:02:07Z",
+      "completed_points": 25,
+      "reason": "Stalled multiplexed SSH control connection between points, before optimized-c4-r4 started.",
+      "recovery": "Verified server idle and next database absent; used a fresh control socket with keepalives."
+    }
+  ]
+}

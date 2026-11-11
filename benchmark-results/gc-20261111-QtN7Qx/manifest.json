@@ -1,0 +1,33 @@
+{
+  "run": "gc-20261111-QtN7Qx",
+  "base_commit": "6a50b38ed54ec2c8602893a0c42cb47b1879e076",
+  "optimized": "uncommitted source snapshot in new-source.tar.gz",
+  "compiler": "go version go1.27.0 linux/amd64",
+  "buildvcs": false,
+  "cgo": false,
+  "binary_sha256": {
+    "benchplot": "41bdf6ebbe84a9d813dbb240e05d3d65a3e380730b35e70a37f9cc1b8706c84b",
+    "bench": "eaa66444cdaaf7b029a2164b84ab246f68e2a776baacee793deb10d779619f7f",
+    "server-new": "673861c4b7f024810b8b6527c993b465d6d2d0dff995226c528d4c72ddd503f9",
+    "server-old": "100c18ba1f44a7e3df38cdef671bedce7c814996c6149536ed293a85741d1fca"
+  },
+  "server": "tsembp@pc713.emulab.net",
+  "client": "tsembp@pc708.emulab.net",
+  "controller": "tsembp@pc705.emulab.net",
+  "private_server": "10.10.1.1:9000",
+  "duration_seconds": 15,
+  "repeats": 5,
+  "concurrency": 4,
+  "virtual_clients": [
+    4,
+    16,
+    64,
+    256,
+    1024
+  ],
+  "payload_bytes": 100,
+  "warmup": 2048,
+  "connection_mode": "persistent",
+  "storage_sync": "bbolt defaults",
+  "note": "Warmup 2048 initializes every virtual client, unlike old warmup 1000 at 1024 clients."
+}
