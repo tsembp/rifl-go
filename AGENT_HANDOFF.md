@@ -108,6 +108,11 @@ clients. Preserve this trade-off rather than claiming a universal speedup.
 
 ## Next work
 
+For Spyros's agent, the immediate two-task handoff is
+[HANDOFF_GC_FOLLOWUP.md](HANDOFF_GC_FOLLOWUP.md): batch-GC measurements and
+investigation of the four-logical-client regression. Complete that bounded work
+before extending the project scope.
+
 ### 1. Profile remaining overhead and finish GC evaluation
 
 Implemented: completions-v2 has one nested bucket per client, with ordered 8-byte
@@ -163,17 +168,18 @@ workloads and durability assumptions.
 
 ### 4. Update documentation and prepare the final report
 
-`README.md` still says the CloudLab matrix needs to be collected and describes
-CXL as only a possible extension. Update it to match the completed experiments
-and the current plan. The final report should distinguish measured facts from
-future work and retain the limitations in `EXPERIMENT_RESULTS.md`.
+README.md now links the completed paired sweeps through benchmark-results/README.md.
+Add the follow-up findings there without overwriting historical data. The final
+report should distinguish measured facts from future work and retain the
+limitations in EXPERIMENT_RESULTS.md.
 
 ## Repository state at handoff
 
-Spyros's implementation and experiment tooling are committed in 6a50b38. The new
-per-client GC work and README clarification are left uncommitted for review.
-Review git status before staging; leave IDE files, databases and generated
-benchmark outputs alone unless explicitly requested.
+Spyros's implementation and experiment tooling are committed in 6a50b38. The
+per-client GC work, migration tests, README clarification and both paired benchmark
+datasets (including raw archives) are committed in b561748. Review git status
+before staging; leave unrelated IDE files and databases alone. Preserve committed
+measurement data and put follow-up experiments in a separate results folder.
 
 Do not commit, push, add dependencies, or change the project scope without the
 maintainers' approval.
