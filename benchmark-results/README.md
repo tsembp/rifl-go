@@ -21,6 +21,12 @@ allocation and the runner in `scripts/cloudlab/gc_followup.py`:
 | First v3 candidate (superseded: quadratic batch GC) | original, v2, v3 | [Note](composite-20261111/NOTE.md) |
 | v3 flat composite keys | original, v2, v3 | [Report](composite2-20261111/REPORT.md) |
 
+Shared-memory extension (one node; see [SHM_DESIGN_PROPOSAL.md](../SHM_DESIGN_PROPOSAL.md)):
+
+| Experiment | Compared | Report |
+|---|---|---|
+| Throughput, failover and batch GC | A: TCP loopback + bbolt, B: shm + bbolt, C: shm state | [Report](shm-20261113/REPORT.md) |
+
 Follow-up folders keep `build/build.json` (binary hashes), the working-tree patch
 and source archive, but not the compiled binaries.
 

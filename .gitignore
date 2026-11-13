@@ -10,3 +10,5 @@ __pycache__/
 # Benchmark binaries are reproducible from build.json hashes and saved sources.
 /benchmark-results/*/build/bench
 /benchmark-results/*/build/server-*
+/benchmark-results/*/build/rifl-*
+/benchmark-results/shm-20261113/results.tar.gz
