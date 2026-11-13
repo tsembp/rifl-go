@@ -58,6 +58,23 @@ the median of the per-repetition values.
   crashes, but not power loss or a machine crash. It does not come from a
   better protocol.
 
+### Context: A on one machine vs earlier two-machine runs
+
+A is the same TCP + bbolt code (schema v3) that `../composite2-20261111`
+measured with the server and benchmark on two machines. The workload settings
+were identical (4 workers, 15-second runs, 2,048 warmup requests, 100-byte
+payload, persistent connections, 5 repetitions, medians shown):
+
+| Clients | A, two machines (`composite2-20261111`) | A, one machine, loopback (this run) |
+|---|---|---|
+| 4 | 1,925.0 ops/s | 1,803.3 ops/s |
+| 1,024 | 1,587.8 ops/s | 1,638.2 ops/s |
+
+The two columns are within about 6% of each other in both directions, which
+is consistent with the synchronous disk commit, not the network, dominating
+A's cost. They come from different sessions and different node allocations, so
+this is a cross-session sanity check, not a measured network cost.
+
 ## Failover
 
 The owner was killed with SIGKILL 5 seconds into a 10-second run, with 4
