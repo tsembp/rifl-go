@@ -25,11 +25,43 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import re
 import time
+from datetime import datetime, timezone
 
 REPO = Path(__file__).resolve().parents[2]
 GO = os.environ.get('GO', 'go')
 CONFIGS = ['A', 'B', 'C']
+LOG_TIME = re.compile(r'^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6}) ')
+
+
+def parse_log_time(line):
+    match = LOG_TIME.match(line)
+    if not match:
+        raise ValueError('log line without a microsecond UTC timestamp: ' + line)
+    return datetime.strptime(match.group(1), '%Y/%m/%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
+
+
+def takeover_times(config, kill_text, standby_log):
+    """Milliseconds from the recorded kill to the standby holding the lock and
+    to it serving. A: lock line, then the listening line. B/C: one line logged
+    when ready, which also carries the acquisition time."""
+    whole, _, fraction = kill_text.strip().rstrip('Z').partition('.')
+    kill = datetime.strptime(whole, '%Y-%m-%dT%H:%M:%S').replace(
+        tzinfo=timezone.utc, microsecond=int((fraction + '000000')[:6]))
+    lines = standby_log.splitlines()
+    if config == 'A':
+        locked = parse_log_time(next(l for l in lines if 'acquired standby lock' in l))
+        ready = parse_log_time(next(l for l in lines if 'listening on' in l))
+    else:
+        line = next(l for l in lines if 'owner epoch' in l and 'ready after' in l)
+        ready = parse_log_time(line)
+        stamp = re.search(r'acquired at (\S+?),', line).group(1)
+        whole, _, fraction = stamp.rstrip('Z').partition('.')
+        locked = datetime.strptime(whole, '%Y-%m-%dT%H:%M:%S').replace(
+            tzinfo=timezone.utc, microsecond=int((fraction + '000000')[:6]))
+    ms = lambda t: round((t - kill).total_seconds() * 1000, 3)
+    return ms(locked), ms(ready)
 
 
 class Runner:
@@ -209,16 +241,28 @@ class Runner:
                 if tag in self.completed():
                     continue
                 self.ssh(f'cd {self.remote} && DURATION=10s KILL_AFTER=5 DATA_DIR={self.data} '
+                         f'LATENCY={int(self.a.failover_latency)} '
                          f'./failover.sh {config} {self.remote} {self.remote}/{tag} >/dev/null', 300)
                 self.download(f'{tag}/summary.csv', self.local / f'{tag}-summary.csv')
+                locked, ready = takeover_times(config, self.ssh(f'cat {self.remote}/{tag}/kill-time.txt'),
+                                               self.ssh(f'cat {self.remote}/{tag}/standby.log'))
                 with (self.local / f'{tag}-summary.csv').open() as source:
                     row = list(csv.DictReader(source))[-1]
                 if int(row['errors']) or int(row['duplicate_effects']):
                     self.log(f'{tag}: INVALID {row}')
                     raise RuntimeError(f'{tag} failed validation')
+                takeover = self.local / 'failover-takeover.csv'
+                new = not takeover.exists()
+                with takeover.open('a', newline='') as sink:
+                    writer = csv.writer(sink)
+                    if new:
+                        writer.writerow(['config', 'repeat', 'kill_to_lock_ms', 'kill_to_ready_ms',
+                                         'max_request_ms', 'p50_ms', 'retried_attempts'])
+                    writer.writerow([config, repeat, locked, ready, row['max_ms'], row['p50_ms'],
+                                     row['attempt_errors']])
                 self.mark(tag)
-                self.log(f'{tag}: max={row["max_ms"]}ms p50={row["p50_ms"]}ms '
-                         f'retried_attempts={row["attempt_errors"]} errors=0 duplicates=0')
+                self.log(f'{tag}: max={row["max_ms"]}ms p50={row["p50_ms"]}ms lock={locked}ms '
+                         f'ready={ready}ms retried_attempts={row["attempt_errors"]} errors=0 duplicates=0')
         self.log('failover complete')
 
     def collect(self):
@@ -235,6 +279,8 @@ def main():
     parser.add_argument('--data-dir', default='/var/tmp', help='disk directory for bbolt files')
     parser.add_argument('--out', help='local results folder (default benchmark-results/<run-id>)')
     parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument('--no-failover-latency', dest='failover_latency', action='store_false',
+                        help='skip per-request latency files in failover runs (summary keeps p50..max)')
     parser.add_argument('phases', nargs='+',
                         choices=['build', 'setup', 'smoke', 'throughput', 'batch', 'failover', 'collect'])
     args = parser.parse_args()

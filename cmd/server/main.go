@@ -26,6 +26,8 @@ func main() {
 	memProfile := flag.String("memprofile", "", "diagnostics only: write an allocation profile here on SIGINT/SIGTERM")
 	standbyLock := flag.String("standby-lock", "", "failover experiments: block on an exclusive flock of this file before opening the database, so a standby takes over when the owner process dies")
 	flag.Parse()
+	// Microsecond UTC timestamps let failover runs time the standby's takeover.
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
 	if *standbyLock != "" {
 		// Same kernel failure detector as the shared-memory standby. Keep the
 		// file open for the process lifetime; the kernel releases it on death.

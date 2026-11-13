@@ -26,6 +26,7 @@ Shared-memory extension (one node; see [SHM_DESIGN_PROPOSAL.md](../SHM_DESIGN_PR
 | Experiment | Compared | Report |
 |---|---|---|
 | Throughput, failover and batch GC | A: TCP loopback + bbolt, B: shm + bbolt, C: shm state | [Report](shm-20261113/REPORT.md) |
+| Failover takeover timing (20 repetitions; corrects the first run's max-latency reading) | A, B, C | [Report](shm-failover-20261113/REPORT.md) |
 
 Follow-up folders keep `build/build.json` (binary hashes), the working-tree patch
 and source archive, but not the compiled binaries.

@@ -97,17 +97,21 @@ configuration.
   stayed in their shared-memory slots and the new owner answered them; no client
   had to retry.
 - **Every configuration kept exactly-once effects** across the takeover.
-- **How the longest request relates to the takeover.** The longest request is
-  an upper bound on the client-visible interruption. For C, normal p99 latency
-  is 0.03 ms, so a 3–11 ms request can only be the takeover. For A and B, normal
-  p99 is about 3 ms, so most of their maximum is also the takeover. With 5
-  samples per configuration, these numbers support "about 10 ms or less on one
-  host", not finer comparisons.
+- **The longest request is not the takeover (corrected).** An earlier version
+  of this report argued that, because C's p99 is 0.03 ms, a 3–11 ms request
+  "can only be the takeover". That was wrong. In this run's per-request samples,
+  the slowest requests of all three configurations are spread across the run,
+  not clustered at the kill. C has rare 1–11 ms stalls that sit above its p99,
+  and A and B have 8–10 ms disk-sync stalls. The column above bounds what any
+  client waited, but it does not measure the takeover. The follow-up
+  `../shm-failover-20261113` measures it directly over 20 repetitions: kill to
+  standby serving takes a median of 3.69 ms (A), 2.61 ms (B) and 2.11 ms (C).
 - **What this shows.** Disk-free takeover (C) works and keeps the RIFL state
-  without a disk restart. On one host, A and B recover just as quickly from the
-  same local file. C's distinctive property only matters when the replacement
-  runs on a *different* machine that can reach the shared memory but not the
-  failed machine's disk. That is the CXL setting, and this model cannot test it.
+  without a disk restart. On one host, A and B recover almost as quickly from
+  the same local file. C's distinctive property only matters when the
+  replacement runs on a *different* machine that can reach the shared memory
+  but not the failed machine's disk. That is the CXL setting, and this model
+  cannot test it.
 
 ## Batch acknowledgement
 
@@ -136,8 +140,9 @@ repetition, so these support comparing medians only.
   complements the crash-point subprocess tests in `shm/`, which kill the owner
   before the commit, after it, mid-apply, and before the reply.
 - **Disk-free takeover.** Keeping the RIFL state in shared memory allows
-  takeover without a disk, with a client-visible interruption of about 10 ms or
-  less on one host.
+  takeover without a disk. On one host, every request completed within about
+  14 ms, including those in flight at the kill. The takeover itself takes about
+  2–4 ms in every configuration (see `../shm-failover-20261113`).
 - **Where the cost lies.** On this machine, synchronous disk commits, not the
   transport, are the dominant cost of durable RIFL.
 

@@ -11,11 +11,15 @@
 # env:   DURATION (10s) KILL_AFTER (5) WORKERS (4) CLIENTS (4)
 #        DATA_DIR (OUT_DIR; must be a real disk for A/B durability)
 #        REGION_DIR (/dev/shm)
+#        LATENCY (1; 0 skips the per-request latency file, which is several
+#        hundred MB per run for C; summary.csv still has p50..max)
 set -eu
 [ "$#" -eq 3 ] || { echo "usage: $0 A|B|C BIN_DIR OUT_DIR" >&2; exit 2; }
 config=$1 bin=$2 out=$3
 duration=${DURATION:-10s} kill_after=${KILL_AFTER:-5}
 workers=${WORKERS:-4} clients=${CLIENTS:-4}
+latency_out=
+[ "${LATENCY:-1}" = 0 ] || latency_out="-latency-out $out/latency.csv"
 mkdir "$out"   # refuse to reuse an existing results directory
 data=${DATA_DIR:-$out}
 region=${REGION_DIR:-/dev/shm}/rifl-failover-$$
@@ -67,7 +71,7 @@ fi
     -duration "$duration" -concurrency "$workers" -virtual-clients "$clients" -warmup 100 \
     -repeats 1 -retry-transport -retry-delay 1ms -timeout 5s -payload-bytes 100 -seed 452 \
     -client-prefix "failover-$config-$$" -out "$out/summary.csv" \
-    -latency-out "$out/latency.csv" -timeline-out "$out/timeline.csv" 2>"$out/bench.log" &
+    $latency_out -timeline-out "$out/timeline.csv" 2>"$out/bench.log" &
 bench=$!
 sleep "$kill_after"
 date -u +%Y-%m-%dT%H:%M:%S.%NZ >"$out/kill-time.txt"
