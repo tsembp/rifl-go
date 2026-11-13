@@ -1,9 +1,9 @@
 package riflrpc
 
 import (
-	"encoding/binary"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	bolt "go.etcd.io/bbolt"
@@ -36,17 +36,15 @@ func TestPerClientGCUsesNumericOrderAndPreservesOtherClients(t *testing.T) {
 		t.Fatalf("Alice boundary=%d records=%d, want 256 and 6", boundary, count)
 	}
 	if err := c.db.View(func(tx *bolt.Tx) error {
-		cursor := tx.Bucket(resultsBucket).Bucket([]byte("Alice")).Cursor()
+		got := clientSequences(tx, "Alice")
 		want := []uint64{256, 65535, 65536, 65537, math.MaxUint64 - 1, math.MaxUint64}
-		i := 0
-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
-			if i >= len(want) || len(key) != 8 || binary.BigEndian.Uint64(key) != want[i] {
-				t.Fatalf("incorrect numeric key order at index %d: %x", i, key)
-			}
-			i++
+		if len(got) != len(want) {
+			t.Fatalf("got ordered records %v, want %v", got, want)
 		}
-		if i != len(want) {
-			t.Fatalf("got %d ordered records, want %d", i, len(want))
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("incorrect numeric key order at index %d: %v", i, got)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -91,5 +89,54 @@ func TestPerClientGCDeletesBatchAcrossPages(t *testing.T) {
 		if err := c.Add(testRequest("client", sequence, 1, 1), &reply); err == nil || err.Error() != staleRequestError {
 			t.Fatalf("sequence %d not stale after batch GC: %v", sequence, err)
 		}
+	}
+}
+
+// Neighbouring clients sort immediately before and after the target in the flat
+// completion bucket. A partial acknowledgement across many leaves must delete
+// exactly the target's lower records and nothing on either side.
+func TestPartialBatchGCKeepsNeighboursAndUpperRecords(t *testing.T) {
+	c, err := OpenCounter(filepath.Join(t.TempDir(), "counter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	long := strings.Repeat("x", 48)
+	before, target, after := long+"-a", long+"-b", long+"-c"
+	var reply AddReply
+	for _, client := range []string{before, after} {
+		for sequence := uint64(1); sequence <= 50; sequence++ {
+			if err := c.Add(testRequest(client, sequence, 1, 1), &reply); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for sequence := uint64(1); sequence <= 3000; sequence++ {
+		if err := c.Add(testRequest(target, sequence, 1, 1), &reply); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Acknowledge 1..1500 on a retry of an existing record: GC only, no new effect.
+	if err := c.Add(testRequest(target, 1501, 1, 1501), &reply); err != nil || reply.Value != 1601 {
+		t.Fatalf("partial acknowledgement replay: %+v, %v", reply, err)
+	}
+	if err := c.db.View(func(tx *bolt.Tx) error {
+		got := clientSequences(tx, target)
+		if len(got) != 1500 || got[0] != 1501 || got[len(got)-1] != 3000 {
+			t.Fatalf("target kept %d records [%v..%v], want 1501..3000", len(got), got[0], got[len(got)-1])
+		}
+		for i, sequence := range got {
+			if sequence != uint64(1501+i) {
+				t.Fatalf("target record gap at index %d: %d", i, sequence)
+			}
+		}
+		for _, client := range []string{before, after} {
+			if n := len(clientSequences(tx, client)); n != 50 {
+				t.Fatalf("neighbour %q lost records: %d left", client[len(client)-2:], n)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

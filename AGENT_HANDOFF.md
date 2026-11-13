@@ -108,23 +108,26 @@ clients. Preserve this trade-off rather than claiming a universal speedup.
 
 ## Next work
 
-For Spyros's agent, the immediate two-task handoff is
-[HANDOFF_GC_FOLLOWUP.md](HANDOFF_GC_FOLLOWUP.md): batch-GC measurements and
-investigation of the four-logical-client regression. Complete that bounded work
-before extending the project scope.
+The two-task GC follow-up in [HANDOFF_GC_FOLLOWUP.md](HANDOFF_GC_FOLLOWUP.md) is
+complete. Batch-GC measurements and the four-client diagnosis are in
+benchmark-results/gcfollowup-20261111/REPORT.md: the v2 nested buckets wrote one
+extra 4 KiB page per commit, with CPU per operation unchanged. Schema v3 (flat
+composite keys) removes that page. Its paired three-way comparison is in
+benchmark-results/composite2-20261111/REPORT.md.
 
 ### 1. Profile remaining overhead and finish GC evaluation
 
-Implemented: completions-v2 has one nested bucket per client, with ordered 8-byte
-big-endian sequence keys. Durable GC only visits that client's reclaimable records.
+Implemented: completions-v3 is one flat bucket whose keys are the client-ID
+length, client ID and 8-byte big-endian sequence (v2 used nested per-client
+buckets and is migrated automatically). Durable GC only visits that client's reclaimable records.
 The RPC protocol and JSON completion values are unchanged. The in-memory counter
 retains its original map-based implementation.
 
 The change includes:
 
-- schema version 2 and atomic migration of both older unversioned layouts;
+- schema version 3 and atomic migration of both older unversioned layouts and v2;
 - atomic lookup, insertion, acknowledgement advancement, and deletion;
-- correct `Stats` accounting across nested buckets or the new index;
+- correct `Stats` accounting of completion keys;
 - tests for migration, duplicate replay, stale protection, crash boundaries,
   blocked gaps, and multiple clients;
 - unchanged durability settings and invariants listed above.
