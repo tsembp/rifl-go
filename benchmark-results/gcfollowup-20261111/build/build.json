@@ -1,0 +1,16 @@
+{
+  "original_commit": "6a50b38ed54ec2c8602893a0c42cb47b1879e076",
+  "optimized_commit": "4ab1b7ad319ec3f084922d0590c0fbe6682b8ae6",
+  "optimized_note": "HEAD plus optimized-working-tree.patch; exact source in optimized-source.tar.gz (bench verification, server profiling flags)",
+  "original_note": "6a50b38 with the current cmd/server/main.go (identical except opt-in profiling flags)",
+  "compiler": "go version go1.27.0 linux/amd64",
+  "cgo": false,
+  "buildvcs": false,
+  "sha256": {
+    "bench": "2ae4676cd7fcafe0449412eb3e90bdd98e7fa79ce381efaeb5753e9c053ca3fc",
+    "optimized-source.tar.gz": "85e134ff29bf8bed39627a4d2ad17ccd6a6d7e626290ca21228690fac797bd2e",
+    "optimized-working-tree.patch": "fdda440baed8c1fba11ecdfdee873f85cbc313bdbfa3f10e902752af7fdc3619",
+    "server-new": "ca5c1bd505547158d31e2989efdf607ae94ac96c863173a146ee6c8ce6904e45",
+    "server-old": "2b7e68248e70a41874034687ed647b6f16f1770d16f431a0d83a44f5932cddd6"
+  }
+}

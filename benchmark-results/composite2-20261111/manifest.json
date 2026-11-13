@@ -1,0 +1,86 @@
+{
+  "run": "composite2-20261111",
+  "family": "gc-followup",
+  "handoff": "HANDOFF_GC_FOLLOWUP.md",
+  "server": "SpyrosG@pc750.emulab.net",
+  "client": "SpyrosG@pc745.emulab.net",
+  "controller": "SpyrosG@pc741.emulab.net",
+  "private_server": "10.10.1.1:9000",
+  "storage_sync": "bbolt defaults",
+  "connection_mode": "persistent",
+  "payload_bytes": 100,
+  "build": {
+    "variants": {
+      "original": "6a50b38ed54ec2c8602893a0c42cb47b1879e076",
+      "optimized": "4ab1b7ad319ec3f084922d0590c0fbe6682b8ae6",
+      "candidate": "working tree"
+    },
+    "working_tree_head": "4ab1b7ad319ec3f084922d0590c0fbe6682b8ae6",
+    "working_tree_note": "HEAD plus working-tree.patch; exact source in working-tree-source.tar.gz",
+    "commit_note": "commit variants use the current cmd/server/main.go (identical except opt-in profiling flags)",
+    "compiler": "go version go1.27.0 linux/amd64",
+    "cgo": false,
+    "buildvcs": false,
+    "sha256": {
+      "bench": "5e14bd744b75928e8efb0647bc360e7b378d9237fc34b9469a42d8fb96faa12b",
+      "server-candidate": "54e1d650fedd7c3af8bf4638113da582dab7a7df7e817be0776391ac59bbfb46",
+      "server-optimized": "ca5c1bd505547158d31e2989efdf607ae94ac96c863173a146ee6c8ce6904e45",
+      "server-original": "2b7e68248e70a41874034687ed647b6f16f1770d16f431a0d83a44f5932cddd6",
+      "working-tree-source.tar.gz": "d30fee7cbda213680c818a4fc23063c7ef25aec8c701c654784a1ccf59c3959d",
+      "working-tree.patch": "894baad868de57e70c732f70a1adddde3253e70f0c497a1abbcee47bf5e70c02"
+    }
+  },
+  "task1": {
+    "scenario": "batch-ack",
+    "records_per_client": [
+      100,
+      1000,
+      10000
+    ],
+    "workers": [
+      1,
+      4
+    ],
+    "repeats": 5,
+    "warmup": 0,
+    "requests": "records_per_client * workers (bench -requests is a total)",
+    "virtual_clients": "workers",
+    "verify": "bench -verify-batch-ack"
+  },
+  "task1_sanity": {
+    "scenarios": [
+      "ack-gc",
+      "blocked-gap"
+    ],
+    "requests": 1000,
+    "workers": 4,
+    "repeats": 5
+  },
+  "variants": [
+    "original",
+    "optimized",
+    "candidate"
+  ],
+  "scaling": {
+    "scenario": "normal",
+    "workers": 4,
+    "virtual_clients": 1024,
+    "duration_seconds": 15,
+    "warmup": 2048,
+    "repeats": 5
+  },
+  "task2": {
+    "scenario": "normal",
+    "workers": 4,
+    "virtual_clients": 4,
+    "duration_seconds": 15,
+    "warmup": 2048,
+    "repeats": 5
+  },
+  "profile": {
+    "note": "diagnostic only; never mixed into performance summaries",
+    "cpu_alloc_runs": 3,
+    "io_runs": 3
+  },
+  "variant_order": "rotates by point and repeat"
+}
