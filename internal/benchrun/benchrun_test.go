@@ -268,4 +268,12 @@ func TestBatchAckMeasuresReclamation(t *testing.T) {
 	if batchSamples != cfg.Concurrency {
 		t.Fatalf("batch samples = %d; want %d", batchSamples, cfg.Concurrency)
 	}
+	if err := VerifyBatchAck(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	wrong := cfg
+	wrong.ClientPrefix += "-unknown"
+	if err := VerifyBatchAck(context.Background(), wrong); err == nil {
+		t.Fatal("verification accepted clients that never ran")
+	}
 }

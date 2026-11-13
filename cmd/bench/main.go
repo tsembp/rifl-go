@@ -49,6 +49,7 @@ func main() {
 	output := flag.String("out", "-", "CSV output path, or - for stdout")
 	latencyOutput := flag.String("latency-out", "", "optional raw per-request latency CSV")
 	timelineOutput := flag.String("timeline-out", "", "optional one-second cumulative timeline CSV")
+	verifyBatchAck := flag.Bool("verify-batch-ack", false, "after each batch-ack repeat, check stale rejection and final-result replay; fails the run on violation")
 	flag.Parse()
 	if *repeats <= 0 || *repeatStart <= 0 || *warmup < 0 {
 		log.Fatal("positive repeats/repeat-start and nonnegative warmup are required")
@@ -129,6 +130,12 @@ func main() {
 			if err := timelineWriter.Error(); err != nil {
 				log.Fatal(err)
 			}
+		}
+		if *verifyBatchAck {
+			if err := benchrun.VerifyBatchAck(context.Background(), cfg); err != nil {
+				log.Fatalf("repeat %d: batch-ack verification failed: %v", repeat, err)
+			}
+			log.Printf("repeat %d: batch-ack verification passed", repeat)
 		}
 		log.Printf("repeat %d: %.1f ops/s p99=%.3fms duplicate_effects=%d completions=%d",
 			repeat, result.Throughput, milliseconds(result.P99), result.DuplicateEffects, result.CompletionsAfter)

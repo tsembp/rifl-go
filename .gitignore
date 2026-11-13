@@ -6,3 +6,7 @@
 /graphify-out/
 /Project_Midterm_Status_Report.docx
 __pycache__/
+
+# Benchmark binaries are reproducible from build.json hashes and saved sources.
+/benchmark-results/*/build/bench
+/benchmark-results/*/build/server-*

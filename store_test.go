@@ -115,9 +115,7 @@ func persistentClientState(t *testing.T, c *PersistentCounter, clientID string) 
 		if err != nil {
 			return err
 		}
-		if records := tx.Bucket(resultsBucket).Bucket([]byte(clientID)); records != nil {
-			count = records.Stats().KeyN
-		}
+		count = len(clientSequences(tx, clientID))
 		return nil
 	})
 	if err != nil {
@@ -474,4 +472,20 @@ func TestAcknowledgementCrashRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+// clientSequences returns one client's stored sequences in key order, checking
+// that the client's records are contiguous in the flat completion bucket.
+func clientSequences(tx *bolt.Tx, clientID string) []uint64 {
+	prefix := completionPrefix(clientID)
+	var sequences []uint64
+	cursor := tx.Bucket(resultsBucket).Cursor()
+	for key, _ := cursor.Seek(prefix); key != nil; key, _ = cursor.Next() {
+		sequence, ok := completionSequence(key, prefix)
+		if !ok {
+			break
+		}
+		sequences = append(sequences, sequence)
+	}
+	return sequences
 }

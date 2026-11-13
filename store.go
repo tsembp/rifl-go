@@ -15,7 +15,7 @@ const storageErrorPrefix = "storage outcome unknown: "
 
 var (
 	stateBucket   = []byte("state-v1")
-	resultsBucket = []byte("completions-v2")
+	resultsBucket = []byte("completions-v3")
 	clientsBucket = []byte("clients-v1")
 	valueKey      = []byte("counter")
 )
@@ -58,7 +58,10 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 	if err := validateAddRequest(req); err != nil {
 		return err
 	}
-	key := sequenceKey(req.ID.Sequence)
+	if len(req.ID.ClientID) > maxClientIDBytes {
+		return fmt.Errorf("client ID longer than %d bytes", maxClientIDBytes)
+	}
+	key := completionKey(req.ID.ClientID, req.ID.Sequence)
 	var result diskCompletion
 	var applicationErr error
 	committedWrite := false
@@ -76,11 +79,8 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 			}
 			return nil
 		}
-		results, err := tx.Bucket(resultsBucket).CreateBucketIfNotExists([]byte(req.ID.ClientID))
-		if err != nil {
-			return err
-		}
-		if data := results.Get(key[:]); data != nil {
+		results := tx.Bucket(resultsBucket)
+		if data := results.Get(key); data != nil {
 			if err := json.Unmarshal(data, &result); err != nil {
 				return err
 			}
@@ -106,7 +106,7 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
 		if err != nil {
 			return err
 		}
-		if err := results.Put(key[:], data); err != nil {
+		if err := results.Put(key, data); err != nil {
 			return err
 		}
 		committedWrite = true
@@ -144,17 +144,18 @@ func processPersistentAck(tx *bolt.Tx, clientID string, incoming uint64) (uint64
 	if err := clients.Put([]byte(clientID), encoded[:]); err != nil {
 		return 0, false, err
 	}
-	// Visit only this client's ordered sequence keys, stopping at the boundary.
-	results := tx.Bucket(resultsBucket).Bucket([]byte(clientID))
-	if results != nil {
-		cursor := results.Cursor()
-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
-			if binary.BigEndian.Uint64(key) >= incoming {
-				break
-			}
-			if err := cursor.Delete(); err != nil {
-				return 0, false, err
-			}
+	// Visit only this client's contiguous, numerically ordered keys, stopping at
+	// the boundary. Do not re-seek after each delete: emptied leaves stay in the
+	// tree until commit, so every Seek would walk them again (quadratic in batch size).
+	prefix := completionPrefix(clientID)
+	cursor := tx.Bucket(resultsBucket).Cursor()
+	for key, _ := cursor.Seek(prefix); ; key, _ = cursor.Next() {
+		sequence, ok := completionSequence(key, prefix)
+		if !ok || sequence >= incoming {
+			break
+		}
+		if err := cursor.Delete(); err != nil {
+			return 0, false, err
 		}
 	}
 	return incoming, true, nil
@@ -193,13 +194,7 @@ func (c *PersistentCounter) Stats(_ struct{}, reply *ServiceStats) error {
 	reply.Protected = true
 	err := c.db.View(func(tx *bolt.Tx) error {
 		reply.Value = int64(binary.BigEndian.Uint64(tx.Bucket(stateBucket).Get(valueKey)))
-		reply.CompletionRecords = 0
-		if err := tx.Bucket(resultsBucket).ForEach(func(client, _ []byte) error {
-			reply.CompletionRecords += tx.Bucket(resultsBucket).Bucket(client).Stats().KeyN
-			return nil
-		}); err != nil {
-			return err
-		}
+		reply.CompletionRecords = tx.Bucket(resultsBucket).Stats().KeyN
 		reply.ClientBoundaries = tx.Bucket(clientsBucket).Stats().KeyN
 		return nil
 	})

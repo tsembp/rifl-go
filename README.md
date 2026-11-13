@@ -77,10 +77,11 @@ acknowledgement boundaries are retained indefinitely because client leases and
 crash cleanup are not implemented. The final completion for an idle client also
 remains until a later request carries its acknowledgement. The benchmark tooling
 is implemented; results for the previous flat completion layout are recorded in
-[EXPERIMENT_RESULTS.md](EXPERIMENT_RESULTS.md). Performance of the new per-client
-layout is evaluated in the paired runs under [benchmark-results](benchmark-results/README.md),
-including raw data and environment/source provenance. It improves scaling at high
-client counts but regresses at four clients. Financial workloads are future work. No CXL
+[EXPERIMENT_RESULTS.md](EXPERIMENT_RESULTS.md). Performance of the later layouts is evaluated in the paired runs under
+[benchmark-results](benchmark-results/README.md), including raw data and
+environment/source provenance. The v2 per-client buckets improved high-client
+scaling but regressed by about 16% at four clients; the current v3 composite keys
+keep the scaling and reduce that gap to about 2%. Financial workloads are future work. No CXL
 hardware or emulation is implemented yet. The application client opens one TCP
 connection per attempt; the benchmark also supports persistent worker connections.
 
@@ -91,25 +92,29 @@ The persistent service uses this layout:
 ```text
 state-v1/
   counter         -> current value
-  schema-version  -> 2
+  schema-version  -> 3
 clients-v1/
   client ID       -> durable FirstIncomplete boundary
-completions-v2/
-  client ID/
-    sequence      -> saved Delta, Reply and Error (JSON)
+completions-v3/
+  len(client ID) | client ID | sequence -> saved Delta, Reply and Error (JSON)
 ```
 
-Sequences are encoded as 8-byte big-endian unsigned integers. This makes bbolt's
-key order match numerical sequence order, including across 255/256. An advancing
-ACK visits only that client's bucket, deletes sequences below FirstIncomplete,
-and stops at the first retained sequence. Duplicate lookup uses the same bucket
-and sequence key. The saved result format and RPC protocol are unchanged.
+The key is a 2-byte big-endian client-ID length, the raw client ID, and the
+sequence as an 8-byte big-endian unsigned integer. Each client's records are
+therefore contiguous and in numerical order, including across 255/256, and the
+length prefix keeps one client's range from overlapping another's. An advancing
+ACK seeks to the client's prefix, deletes sequences below FirstIncomplete while
+advancing, and stops at the first retained sequence. Duplicate lookup uses the
+same key. Version 2 used one nested bucket per client; that cost an extra dirty
+page per commit, which caused the measured four-client regression. Client IDs
+longer than 32,758 bytes are rejected because the key would exceed bbolt's limit. The saved result format and RPC protocol are unchanged.
 The in-memory Counter retains its original map-based implementation.
 
 OpenCounter automatically upgrades either previous unversioned completions-v1
-layout, including databases created before acknowledgements were added. Migration
-copies the original saved results, preserves the counter and client boundaries,
-removes the old bucket, and records version 2 in one transaction. An error or
+layout, including databases created before acknowledgements were added, and the
+version 2 nested completions-v2 layout. Migration copies the original saved
+results, preserves the counter and client boundaries, removes the old bucket, and
+records version 3 in one transaction. An error or
 process crash before commit leaves the old schema; after commit the new schema
 is complete. Unsupported schema versions are rejected.
 
@@ -179,9 +184,10 @@ validation, stale rejection, monotonic acknowledgement boundaries, remembered
 overflow errors, timeout retries, and cancellation. Storage tests also verify
 reclamation and stale protection across reopen, migration of existing databases,
 recovery before/after mutation and acknowledgement commits using a subprocess,
-and ambiguous storage failures. New storage tests cover both legacy migrations,
+and ambiguous storage failures. Storage tests cover migration from both v1 layouts and from v2,
 rollback and process crashes during migration, original-result/error preservation,
-cross-client isolation, numeric key order, multi-page GC, and nested record counts.
+cross-client isolation, numeric key order, multi-page GC including partial batches
+between neighbouring clients, and overlong client IDs.
 They do not simulate power loss or replace a
 formal correctness proof.
 
@@ -202,11 +208,9 @@ bare-metal profile and native deployment workflow are in
 
 ## Next steps
 
-1. Profile the four-client regression and complete paired batch-GC/blocked-gap
-   experiments. The client-count and fixed-client concurrency sweeps are saved in
-   benchmark-results; preserve those results before making further changes.
-2. Add a small financial demonstration; consider a shared-memory transport if
-   time permits and the instructor confirms its scope.
+1. Design and build the shared-memory (CXL-inspired) comparison; see
+   [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+2. Add a small financial demonstration if time permits.
 
 ## References
 

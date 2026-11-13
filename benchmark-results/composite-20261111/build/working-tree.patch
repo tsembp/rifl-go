@@ -1,0 +1,759 @@
+diff --git a/cmd/bench/main.go b/cmd/bench/main.go
+index bf31346..51fc495 100644
+--- a/cmd/bench/main.go
++++ b/cmd/bench/main.go
+@@ -49,6 +49,7 @@ func main() {
+ 	output := flag.String("out", "-", "CSV output path, or - for stdout")
+ 	latencyOutput := flag.String("latency-out", "", "optional raw per-request latency CSV")
+ 	timelineOutput := flag.String("timeline-out", "", "optional one-second cumulative timeline CSV")
++	verifyBatchAck := flag.Bool("verify-batch-ack", false, "after each batch-ack repeat, check stale rejection and final-result replay; fails the run on violation")
+ 	flag.Parse()
+ 	if *repeats <= 0 || *repeatStart <= 0 || *warmup < 0 {
+ 		log.Fatal("positive repeats/repeat-start and nonnegative warmup are required")
+@@ -130,6 +131,12 @@ func main() {
+ 				log.Fatal(err)
+ 			}
+ 		}
++		if *verifyBatchAck {
++			if err := benchrun.VerifyBatchAck(context.Background(), cfg); err != nil {
++				log.Fatalf("repeat %d: batch-ack verification failed: %v", repeat, err)
++			}
++			log.Printf("repeat %d: batch-ack verification passed", repeat)
++		}
+ 		log.Printf("repeat %d: %.1f ops/s p99=%.3fms duplicate_effects=%d completions=%d",
+ 			repeat, result.Throughput, milliseconds(result.P99), result.DuplicateEffects, result.CompletionsAfter)
+ 	}
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+index 6de5b3d..71c5a88 100644
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -5,7 +5,12 @@ import (
+ 	"log"
+ 	"net"
+ 	"net/rpc"
++	"os"
++	"os/signal"
++	"runtime"
++	"runtime/pprof"
+ 	"strings"
++	"syscall"
+ 
+ 	riflrpc "github.com/tsembp/rifl-go"
+ )
+@@ -14,6 +19,8 @@ func main() {
+ 	addr := flag.String("addr", "127.0.0.1:9000", "TCP listen address")
+ 	dbPath := flag.String("db", "rifl.db", "durable counter database path")
+ 	mode := flag.String("mode", "protected", "service mode: protected or baseline")
++	cpuProfile := flag.String("cpuprofile", "", "diagnostics only: write a CPU profile here until SIGINT/SIGTERM")
++	memProfile := flag.String("memprofile", "", "diagnostics only: write an allocation profile here on SIGINT/SIGTERM")
+ 	flag.Parse()
+ 	var service interface{}
+ 	var closeService func() error
+@@ -43,6 +50,17 @@ func main() {
+ 		log.Fatal(err)
+ 	}
+ 	defer listener.Close()
++	if *cpuProfile != "" || *memProfile != "" {
++		stopProfiling := startProfiling(*cpuProfile, *memProfile)
++		signals := make(chan os.Signal, 1)
++		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
++		go func() {
++			<-signals
++			stopProfiling()
++			closeService()
++			os.Exit(0)
++		}()
++	}
+ 	log.Printf("%s durable counter RPC listening on %s (database %s)", *mode, listener.Addr(), *dbPath)
+ 	for {
+ 		conn, err := listener.Accept()
+@@ -52,3 +70,36 @@ func main() {
+ 		go server.ServeConn(conn)
+ 	}
+ }
++
++// startProfiling is opt-in. Uninstrumented runs keep the default shutdown path.
++func startProfiling(cpuPath, memPath string) func() {
++	var cpuFile *os.File
++	if cpuPath != "" {
++		file, err := os.Create(cpuPath)
++		if err != nil {
++			log.Fatal(err)
++		}
++		if err := pprof.StartCPUProfile(file); err != nil {
++			log.Fatal(err)
++		}
++		cpuFile = file
++	}
++	return func() {
++		if cpuFile != nil {
++			pprof.StopCPUProfile()
++			cpuFile.Close()
++		}
++		if memPath != "" {
++			file, err := os.Create(memPath)
++			if err != nil {
++				log.Print(err)
++				return
++			}
++			defer file.Close()
++			runtime.GC()
++			if err := pprof.Lookup("allocs").WriteTo(file, 0); err != nil {
++				log.Print(err)
++			}
++		}
++	}
++}
+diff --git a/gc_test.go b/gc_test.go
+index 3d44242..93c98cc 100644
+--- a/gc_test.go
++++ b/gc_test.go
+@@ -1,7 +1,6 @@
+ package riflrpc
+ 
+ import (
+-	"encoding/binary"
+ 	"math"
+ 	"path/filepath"
+ 	"testing"
+@@ -36,17 +35,15 @@ func TestPerClientGCUsesNumericOrderAndPreservesOtherClients(t *testing.T) {
+ 		t.Fatalf("Alice boundary=%d records=%d, want 256 and 6", boundary, count)
+ 	}
+ 	if err := c.db.View(func(tx *bolt.Tx) error {
+-		cursor := tx.Bucket(resultsBucket).Bucket([]byte("Alice")).Cursor()
++		got := clientSequences(tx, "Alice")
+ 		want := []uint64{256, 65535, 65536, 65537, math.MaxUint64 - 1, math.MaxUint64}
+-		i := 0
+-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+-			if i >= len(want) || len(key) != 8 || binary.BigEndian.Uint64(key) != want[i] {
+-				t.Fatalf("incorrect numeric key order at index %d: %x", i, key)
+-			}
+-			i++
++		if len(got) != len(want) {
++			t.Fatalf("got ordered records %v, want %v", got, want)
+ 		}
+-		if i != len(want) {
+-			t.Fatalf("got %d ordered records, want %d", i, len(want))
++		for i := range want {
++			if got[i] != want[i] {
++				t.Fatalf("incorrect numeric key order at index %d: %v", i, got)
++			}
+ 		}
+ 		return nil
+ 	}); err != nil {
+diff --git a/internal/benchrun/benchrun_test.go b/internal/benchrun/benchrun_test.go
+index 34933e7..cdcd7a3 100644
+--- a/internal/benchrun/benchrun_test.go
++++ b/internal/benchrun/benchrun_test.go
+@@ -268,4 +268,12 @@ func TestBatchAckMeasuresReclamation(t *testing.T) {
+ 	if batchSamples != cfg.Concurrency {
+ 		t.Fatalf("batch samples = %d; want %d", batchSamples, cfg.Concurrency)
+ 	}
++	if err := VerifyBatchAck(context.Background(), cfg); err != nil {
++		t.Fatal(err)
++	}
++	wrong := cfg
++	wrong.ClientPrefix += "-unknown"
++	if err := VerifyBatchAck(context.Background(), wrong); err == nil {
++		t.Fatal("verification accepted clients that never ran")
++	}
+ }
+diff --git a/schema.go b/schema.go
+index 28fcdd5..b431142 100644
+--- a/schema.go
++++ b/schema.go
+@@ -1,6 +1,7 @@
+ package riflrpc
+ 
+ import (
++	"bytes"
+ 	"encoding/binary"
+ 	"encoding/json"
+ 	"errors"
+@@ -10,11 +11,19 @@ import (
+ )
+ 
+ var (
+-	legacyResultsBucket = []byte("completions-v1")
++	legacyResultsBucket = []byte("completions-v1") // unversioned: flat JSON RequestID keys
++	nestedResultsBucket = []byte("completions-v2") // version 2: <client bucket>/<sequence>
+ 	schemaVersionKey    = []byte("schema-version")
+ )
+ 
+-const counterSchemaVersion uint64 = 2
++// Version 3 stores every completion in one flat bucket keyed by
++// completionKey. Version 2's nested per-client buckets cost an extra dirty page
++// per commit; the composite key keeps each client's records contiguous and
++// numerically ordered, so acknowledgement GC still visits only that client.
++const counterSchemaVersion uint64 = 3
++
++// maxClientIDBytes keeps completion keys within bbolt's 32768-byte key limit.
++const maxClientIDBytes = bolt.MaxKeySize - 2 - 8
+ 
+ // sequenceKey preserves numerical order in bbolt's lexicographic key order.
+ func sequenceKey(sequence uint64) [8]byte {
+@@ -23,15 +32,40 @@ func sequenceKey(sequence uint64) [8]byte {
+ 	return key
+ }
+ 
++// completionPrefix is a 2-byte big-endian length followed by the raw client ID.
++// The length makes the prefix unambiguous: no client's keys can fall inside
++// another client's range, whatever bytes the IDs contain.
++func completionPrefix(clientID string) []byte {
++	prefix := make([]byte, 2+len(clientID), 2+len(clientID)+8)
++	binary.BigEndian.PutUint16(prefix, uint16(len(clientID)))
++	copy(prefix[2:], clientID)
++	return prefix
++}
++
++func completionKey(clientID string, sequence uint64) []byte {
++	encoded := sequenceKey(sequence)
++	return append(completionPrefix(clientID), encoded[:]...)
++}
++
++// completionSequence reports the sequence of key if it belongs to prefix.
++func completionSequence(key, prefix []byte) (uint64, bool) {
++	if len(key) != len(prefix)+8 || !bytes.HasPrefix(key, prefix) {
++		return 0, false
++	}
++	return binary.BigEndian.Uint64(key[len(prefix):]), true
++}
++
+ // initializeCounterSchema runs in a single write transaction. Migration either
+-// commits the new layout, version and removal of v1 together, or changes nothing.
++// commits the new layout, version and removal of the old layout together, or
++// changes nothing.
+ func initializeCounterSchema(tx *bolt.Tx) error {
+ 	state := tx.Bucket(stateBucket)
+ 	legacy := tx.Bucket(legacyResultsBucket)
++	nested := tx.Bucket(nestedResultsBucket)
+ 	results := tx.Bucket(resultsBucket)
+ 	clients := tx.Bucket(clientsBucket)
+ 	if state == nil {
+-		if legacy != nil || results != nil || clients != nil {
++		if legacy != nil || nested != nil || results != nil || clients != nil {
+ 			return errors.New("counter database is missing state")
+ 		}
+ 		var err error
+@@ -47,27 +81,65 @@ func initializeCounterSchema(tx *bolt.Tx) error {
+ 		if _, err := tx.CreateBucket(clientsBucket); err != nil {
+ 			return err
+ 		}
+-		version := sequenceKey(counterSchemaVersion)
+-		return state.Put(schemaVersionKey, version[:])
++		return setSchemaVersion(state)
+ 	}
+ 	if len(state.Get(valueKey)) != 8 {
+ 		return errors.New("invalid counter state")
+ 	}
+ 	version := state.Get(schemaVersionKey)
+-	if version != nil {
+-		if len(version) != 8 || binary.BigEndian.Uint64(version) != counterSchemaVersion {
+-			return errors.New("unsupported counter database schema version")
++	switch {
++	case version == nil:
++		// Both earliest releases used an unversioned flat completions-v1 bucket.
++		// The very first release had no clients-v1 acknowledgement bucket.
++		if legacy == nil || nested != nil || results != nil {
++			return errors.New("invalid legacy counter database schema")
+ 		}
+-		if results == nil || clients == nil || legacy != nil {
++		return migrateCompletions(tx, state, legacyResultsBucket, func(put func(string, uint64, []byte) error) error {
++			return legacy.ForEach(func(key, data []byte) error {
++				var id RequestID
++				if data == nil {
++					return errors.New("unexpected nested legacy completion bucket")
++				}
++				if err := json.Unmarshal(key, &id); err != nil {
++					return fmt.Errorf("decode legacy request ID: %w", err)
++				}
++				return put(id.ClientID, id.Sequence, data)
++			})
++		})
++	case len(version) != 8:
++		return errors.New("unsupported counter database schema version")
++	case binary.BigEndian.Uint64(version) == 2:
++		if nested == nil || clients == nil || legacy != nil || results != nil {
+ 			return errors.New("invalid v2 counter database schema")
+ 		}
++		return migrateCompletions(tx, state, nestedResultsBucket, func(put func(string, uint64, []byte) error) error {
++			return nested.ForEach(func(client, data []byte) error {
++				records := nested.Bucket(client)
++				if data != nil || records == nil {
++					return errors.New("unexpected value in v2 completion bucket")
++				}
++				return records.ForEach(func(key, data []byte) error {
++					if len(key) != 8 || data == nil {
++						return errors.New("invalid v2 completion record")
++					}
++					return put(string(client), binary.BigEndian.Uint64(key), data)
++				})
++			})
++		})
++	case binary.BigEndian.Uint64(version) == counterSchemaVersion:
++		if results == nil || clients == nil || legacy != nil || nested != nil {
++			return errors.New("invalid v3 counter database schema")
++		}
+ 		return nil
++	default:
++		return errors.New("unsupported counter database schema version")
+ 	}
+-	// Both previous releases used an unversioned flat completions-v1 bucket.
+-	// The earliest release had no clients-v1 acknowledgement bucket.
+-	if legacy == nil || results != nil {
+-		return errors.New("invalid legacy counter database schema")
+-	}
++}
++
++// migrateCompletions copies every old record into the flat v3 bucket, then
++// removes the old bucket and records the new version in the same transaction.
++func migrateCompletions(tx *bolt.Tx, state *bolt.Bucket, old []byte,
++	each func(put func(clientID string, sequence uint64, data []byte) error) error) error {
+ 	if _, err := tx.CreateBucketIfNotExists(clientsBucket); err != nil {
+ 		return err
+ 	}
+@@ -75,37 +147,33 @@ func initializeCounterSchema(tx *bolt.Tx) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	if err := legacy.ForEach(func(key, data []byte) error {
+-		var id RequestID
+-		if data == nil {
+-			return errors.New("unexpected nested legacy completion bucket")
+-		}
+-		if err := json.Unmarshal(key, &id); err != nil {
+-			return fmt.Errorf("decode legacy request ID: %w", err)
++	if err := each(func(clientID string, sequence uint64, data []byte) error {
++		if clientID == "" || sequence == 0 {
++			return errors.New("invalid migrated request ID")
+ 		}
+-		if id.ClientID == "" || id.Sequence == 0 {
+-			return errors.New("invalid legacy request ID")
++		if len(clientID) > maxClientIDBytes {
++			return errors.New("migrated client ID is too long")
+ 		}
+ 		var result diskCompletion
+ 		if err := json.Unmarshal(data, &result); err != nil {
+-			return fmt.Errorf("decode legacy completion: %w", err)
++			return fmt.Errorf("decode migrated completion: %w", err)
+ 		}
+-		client, err := results.CreateBucketIfNotExists([]byte(id.ClientID))
+-		if err != nil {
+-			return err
+-		}
+-		sequence := sequenceKey(id.Sequence)
+-		if client.Get(sequence[:]) != nil {
+-			return errors.New("duplicate logical ID in legacy completions")
++		key := completionKey(clientID, sequence)
++		if results.Get(key) != nil {
++			return errors.New("duplicate logical ID in migrated completions")
+ 		}
+ 		// Copy the saved bytes exactly; never recompute replies from current state.
+-		return client.Put(sequence[:], data)
++		return results.Put(key, append([]byte(nil), data...))
+ 	}); err != nil {
+ 		return err
+ 	}
+-	if err := tx.DeleteBucket(legacyResultsBucket); err != nil {
++	if err := tx.DeleteBucket(old); err != nil {
+ 		return err
+ 	}
++	return setSchemaVersion(state)
++}
++
++func setSchemaVersion(state *bolt.Bucket) error {
+ 	encoded := sequenceKey(counterSchemaVersion)
+ 	return state.Put(schemaVersionKey, encoded[:])
+ }
+diff --git a/schema_test.go b/schema_test.go
+index bb05d42..96b3fc9 100644
+--- a/schema_test.go
++++ b/schema_test.go
+@@ -73,15 +73,23 @@ func seedLegacy(t *testing.T, path string, withAcks bool) {
+ 	}
+ }
+ 
++// seeds lists every older on-disk layout that OpenCounter must upgrade.
++var seeds = []struct {
++	name     string
++	withAcks bool
++	seed     func(*testing.T, string, bool)
++}{
++	{"v1-before-acks", false, seedLegacy},
++	{"v1-with-acks", true, seedLegacy},
++	{"v2-nested", true, seedV2},
++}
++
+ func TestLegacyMigrationPreservesResultsAndBoundaries(t *testing.T) {
+-	for _, withAcks := range []bool{false, true} {
+-		name := "before-acks"
+-		if withAcks {
+-			name = "with-acks"
+-		}
+-		t.Run(name, func(t *testing.T) {
++	for _, source := range seeds {
++		withAcks := source.withAcks
++		t.Run(source.name, func(t *testing.T) {
+ 			path := filepath.Join(t.TempDir(), "legacy.db")
+-			seedLegacy(t, path, withAcks)
++			source.seed(t, path, withAcks)
+ 			// Opening repeatedly must not repeat migration or lose saved state.
+ 			for reopen := 0; reopen < 2; reopen++ {
+ 				c, err := OpenCounter(path)
+@@ -90,7 +98,7 @@ func TestLegacyMigrationPreservesResultsAndBoundaries(t *testing.T) {
+ 				}
+ 				func() {
+ 					defer c.Close()
+-					assertV2Schema(t, c.db)
++					assertCurrentSchema(t, c.db)
+ 					for _, tc := range []struct {
+ 						req  AddRequest
+ 						want int64
+@@ -125,12 +133,13 @@ func TestLegacyMigrationPreservesResultsAndBoundaries(t *testing.T) {
+ 	}
+ }
+ 
+-func assertV2Schema(t *testing.T, db *bolt.DB) {
++func assertCurrentSchema(t *testing.T, db *bolt.DB) {
+ 	t.Helper()
+ 	if err := db.View(func(tx *bolt.Tx) error {
+ 		version := tx.Bucket(stateBucket).Get(schemaVersionKey)
+-		if len(version) != 8 || binary.BigEndian.Uint64(version) != 2 || tx.Bucket(legacyResultsBucket) != nil || tx.Bucket(resultsBucket) == nil {
+-			return errors.New("expected version 2 with only nested completions")
++		if len(version) != 8 || binary.BigEndian.Uint64(version) != 3 || tx.Bucket(legacyResultsBucket) != nil ||
++			tx.Bucket(nestedResultsBucket) != nil || tx.Bucket(resultsBucket) == nil {
++			return errors.New("expected version 3 with only flat completions")
+ 		}
+ 		return nil
+ 	}); err != nil {
+@@ -226,46 +235,166 @@ func TestMigrationCrashHelper(t *testing.T) {
+ }
+ 
+ func TestMigrationCrashRecovery(t *testing.T) {
+-	for _, point := range []string{"before", "after"} {
+-		t.Run(point, func(t *testing.T) {
+-			path := filepath.Join(t.TempDir(), "legacy.db")
+-			seedLegacy(t, path, true)
+-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+-			defer cancel()
+-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMigrationCrashHelper$")
+-			cmd.Env = append(os.Environ(), "RIFL_MIGRATION_CRASH="+point, "RIFL_MIGRATION_DB="+path)
+-			output, err := cmd.CombinedOutput()
+-			var exit *exec.ExitError
+-			if !errors.As(err, &exit) || exit.ExitCode() != 79 {
+-				t.Fatalf("wrong migration crash: %v, %s", err, output)
+-			}
+-			db, err := bolt.Open(path, 0600, nil)
++	for _, source := range []struct {
++		seed func(*testing.T, string, bool)
++		old  []byte
++		name string
++	}{{seedLegacy, legacyResultsBucket, "v1"}, {seedV2, nestedResultsBucket, "v2"}} {
++		for _, point := range []string{"before", "after"} {
++			t.Run(source.name+"-"+point, func(t *testing.T) {
++				testMigrationCrash(t, source.seed, source.old, point)
++			})
++		}
++	}
++}
++
++func testMigrationCrash(t *testing.T, seed func(*testing.T, string, bool), old []byte, point string) {
++	path := filepath.Join(t.TempDir(), "legacy.db")
++	seed(t, path, true)
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMigrationCrashHelper$")
++	cmd.Env = append(os.Environ(), "RIFL_MIGRATION_CRASH="+point, "RIFL_MIGRATION_DB="+path)
++	output, err := cmd.CombinedOutput()
++	var exit *exec.ExitError
++	if !errors.As(err, &exit) || exit.ExitCode() != 79 {
++		t.Fatalf("wrong migration crash: %v, %s", err, output)
++	}
++	db, err := bolt.Open(path, 0600, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if point == "after" {
++		assertCurrentSchema(t, db)
++	} else if err := db.View(func(tx *bolt.Tx) error {
++		if tx.Bucket(resultsBucket) != nil || tx.Bucket(old) == nil {
++			return errors.New("uncommitted migration was partially visible")
++		}
++		return nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++	db.Close()
++	c, err := OpenCounter(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	var reply AddReply
++	if err := c.Add(testRequest("Alice", 2, 7, 1), &reply); err != nil || reply.Value != 7 {
++		t.Fatalf("retry after migration crash: %+v, %v", reply, err)
++	}
++	if err := c.Add(testRequest("Alice", 1, 7, 1), &reply); err == nil || err.Error() != staleRequestError {
++		t.Fatalf("lost stale protection: %v", err)
++	}
++}
++
++// seedV2 writes the version 2 nested layout (completions-v2/<client>/<seq>)
++// with the same records and boundary as seedLegacy(withAcks=true).
++func seedV2(t *testing.T, path string, _ bool) {
++	t.Helper()
++	db, err := bolt.Open(path, 0600, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	err = db.Update(func(tx *bolt.Tx) error {
++		state, err := tx.CreateBucket(stateBucket)
++		if err != nil {
++			return err
++		}
++		value, version := sequenceKey(17), sequenceKey(2)
++		if err := state.Put(valueKey, value[:]); err != nil {
++			return err
++		}
++		if err := state.Put(schemaVersionKey, version[:]); err != nil {
++			return err
++		}
++		nested, err := tx.CreateBucket(nestedResultsBucket)
++		if err != nil {
++			return err
++		}
++		for _, record := range []struct {
++			id     RequestID
++			result diskCompletion
++		}{
++			{RequestID{"Alice", 2}, diskCompletion{Delta: 7, Reply: AddReply{7}}},
++			{RequestID{"Alice", 10}, diskCompletion{Delta: 5, Reply: AddReply{12}}},
++			{RequestID{"Bob", 1}, diskCompletion{Delta: 5, Reply: AddReply{17}}},
++			{RequestID{"Alice", 11}, diskCompletion{Delta: math.MaxInt64, Error: "counter overflow"}},
++		} {
++			client, err := nested.CreateBucketIfNotExists([]byte(record.id.ClientID))
+ 			if err != nil {
+-				t.Fatal(err)
+-			}
+-			if point == "after" {
+-				assertV2Schema(t, db)
+-			} else if err := db.View(func(tx *bolt.Tx) error {
+-				if tx.Bucket(resultsBucket) != nil || tx.Bucket(legacyResultsBucket) == nil || tx.Bucket(stateBucket).Get(schemaVersionKey) != nil {
+-					return errors.New("uncommitted migration was partially visible")
+-				}
+-				return nil
+-			}); err != nil {
+-				t.Fatal(err)
++				return err
+ 			}
+-			db.Close()
+-			c, err := OpenCounter(path)
++			data, err := json.Marshal(record.result)
+ 			if err != nil {
+-				t.Fatal(err)
+-			}
+-			defer c.Close()
+-			var reply AddReply
+-			if err := c.Add(testRequest("Alice", 2, 7, 1), &reply); err != nil || reply.Value != 7 {
+-				t.Fatalf("retry after migration crash: %+v, %v", reply, err)
++				return err
+ 			}
+-			if err := c.Add(testRequest("Alice", 1, 7, 1), &reply); err == nil || err.Error() != staleRequestError {
+-				t.Fatalf("lost stale protection: %v", err)
++			key := sequenceKey(record.id.Sequence)
++			if err := client.Put(key[:], data); err != nil {
++				return err
+ 			}
+-		})
++		}
++		clients, err := tx.CreateBucket(clientsBucket)
++		if err != nil {
++			return err
++		}
++		boundary := sequenceKey(2)
++		return clients.Put([]byte("Alice"), boundary[:])
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestMalformedV2MigrationRollsBack(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "v2.db")
++	seedV2(t, path, true)
++	db, err := bolt.Open(path, 0600, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := db.Update(func(tx *bolt.Tx) error {
++		return tx.Bucket(nestedResultsBucket).Bucket([]byte("Bob")).Put([]byte("short"), []byte("{}"))
++	}); err != nil {
++		t.Fatal(err)
++	}
++	db.Close()
++	if c, err := OpenCounter(path); err == nil {
++		c.Close()
++		t.Fatal("malformed v2 migration succeeded")
++	}
++	db, err = bolt.Open(path, 0600, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer db.Close()
++	if err := db.View(func(tx *bolt.Tx) error {
++		version := tx.Bucket(stateBucket).Get(schemaVersionKey)
++		if tx.Bucket(resultsBucket) != nil || binary.BigEndian.Uint64(version) != 2 ||
++			tx.Bucket(nestedResultsBucket).Bucket([]byte("Alice")).Stats().KeyN != 3 {
++			return errors.New("failed v2 migration left partial changes")
++		}
++		return nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestOverlongClientIDIsRejectedDefinitively(t *testing.T) {
++	c, err := OpenCounter(filepath.Join(t.TempDir(), "counter.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	long := string(make([]byte, maxClientIDBytes+1))
++	err = c.Add(testRequest(long, 1, 1, 1), &AddReply{})
++	if err == nil || len(err.Error()) >= len(storageErrorPrefix) && err.Error()[:len(storageErrorPrefix)] == storageErrorPrefix {
++		t.Fatalf("overlong client ID: %v; want a definitive rejection", err)
++	}
++	var stats ServiceStats
++	if err := c.Stats(struct{}{}, &stats); err != nil || stats.Value != 0 || stats.CompletionRecords != 0 {
++		t.Fatalf("overlong client ID changed state: %+v, %v", stats, err)
+ 	}
+ }
+diff --git a/store.go b/store.go
+index d999f6a..aacb784 100644
+--- a/store.go
++++ b/store.go
+@@ -15,7 +15,7 @@ const storageErrorPrefix = "storage outcome unknown: "
+ 
+ var (
+ 	stateBucket   = []byte("state-v1")
+-	resultsBucket = []byte("completions-v2")
++	resultsBucket = []byte("completions-v3")
+ 	clientsBucket = []byte("clients-v1")
+ 	valueKey      = []byte("counter")
+ )
+@@ -58,7 +58,10 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 	if err := validateAddRequest(req); err != nil {
+ 		return err
+ 	}
+-	key := sequenceKey(req.ID.Sequence)
++	if len(req.ID.ClientID) > maxClientIDBytes {
++		return fmt.Errorf("client ID longer than %d bytes", maxClientIDBytes)
++	}
++	key := completionKey(req.ID.ClientID, req.ID.Sequence)
+ 	var result diskCompletion
+ 	var applicationErr error
+ 	committedWrite := false
+@@ -76,11 +79,8 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 			}
+ 			return nil
+ 		}
+-		results, err := tx.Bucket(resultsBucket).CreateBucketIfNotExists([]byte(req.ID.ClientID))
+-		if err != nil {
+-			return err
+-		}
+-		if data := results.Get(key[:]); data != nil {
++		results := tx.Bucket(resultsBucket)
++		if data := results.Get(key); data != nil {
+ 			if err := json.Unmarshal(data, &result); err != nil {
+ 				return err
+ 			}
+@@ -106,7 +106,7 @@ func (c *PersistentCounter) Add(req AddRequest, reply *AddReply) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		if err := results.Put(key[:], data); err != nil {
++		if err := results.Put(key, data); err != nil {
+ 			return err
+ 		}
+ 		committedWrite = true
+@@ -144,17 +144,18 @@ func processPersistentAck(tx *bolt.Tx, clientID string, incoming uint64) (uint64
+ 	if err := clients.Put([]byte(clientID), encoded[:]); err != nil {
+ 		return 0, false, err
+ 	}
+-	// Visit only this client's ordered sequence keys, stopping at the boundary.
+-	results := tx.Bucket(resultsBucket).Bucket([]byte(clientID))
+-	if results != nil {
+-		cursor := results.Cursor()
+-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+-			if binary.BigEndian.Uint64(key) >= incoming {
+-				break
+-			}
+-			if err := cursor.Delete(); err != nil {
+-				return 0, false, err
+-			}
++	// Visit only this client's contiguous, numerically ordered keys, stopping at
++	// the boundary. Re-seek after each delete instead of relying on Next.
++	prefix := completionPrefix(clientID)
++	cursor := tx.Bucket(resultsBucket).Cursor()
++	for {
++		key, _ := cursor.Seek(prefix)
++		sequence, ok := completionSequence(key, prefix)
++		if !ok || sequence >= incoming {
++			break
++		}
++		if err := cursor.Delete(); err != nil {
++			return 0, false, err
+ 		}
+ 	}
+ 	return incoming, true, nil
+@@ -193,13 +194,7 @@ func (c *PersistentCounter) Stats(_ struct{}, reply *ServiceStats) error {
+ 	reply.Protected = true
+ 	err := c.db.View(func(tx *bolt.Tx) error {
+ 		reply.Value = int64(binary.BigEndian.Uint64(tx.Bucket(stateBucket).Get(valueKey)))
+-		reply.CompletionRecords = 0
+-		if err := tx.Bucket(resultsBucket).ForEach(func(client, _ []byte) error {
+-			reply.CompletionRecords += tx.Bucket(resultsBucket).Bucket(client).Stats().KeyN
+-			return nil
+-		}); err != nil {
+-			return err
+-		}
++		reply.CompletionRecords = tx.Bucket(resultsBucket).Stats().KeyN
+ 		reply.ClientBoundaries = tx.Bucket(clientsBucket).Stats().KeyN
+ 		return nil
+ 	})
+diff --git a/store_test.go b/store_test.go
+index 8191c00..0ba734f 100644
+--- a/store_test.go
++++ b/store_test.go
+@@ -115,9 +115,7 @@ func persistentClientState(t *testing.T, c *PersistentCounter, clientID string)
+ 		if err != nil {
+ 			return err
+ 		}
+-		if records := tx.Bucket(resultsBucket).Bucket([]byte(clientID)); records != nil {
+-			count = records.Stats().KeyN
+-		}
++		count = len(clientSequences(tx, clientID))
+ 		return nil
+ 	})
+ 	if err != nil {
+@@ -475,3 +473,19 @@ func TestAcknowledgementCrashRecovery(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// clientSequences returns one client's stored sequences in key order, checking
++// that the client's records are contiguous in the flat completion bucket.
++func clientSequences(tx *bolt.Tx, clientID string) []uint64 {
++	prefix := completionPrefix(clientID)
++	var sequences []uint64
++	cursor := tx.Bucket(resultsBucket).Cursor()
++	for key, _ := cursor.Seek(prefix); key != nil; key, _ = cursor.Next() {
++		sequence, ok := completionSequence(key, prefix)
++		if !ok {
++			break
++		}
++		sequences = append(sequences, sequence)
++	}
++	return sequences
++}
