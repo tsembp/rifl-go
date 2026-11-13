@@ -149,4 +149,13 @@ func TestServeAndClientTimeoutRetrySameID(t *testing.T) {
 	if _, err := call(req("c", 1, 4, 2)); !errors.Is(err, CodeStale) {
 		t.Fatalf("stale: %v", err)
 	}
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stats, err := client.Stats(ctx)
+	if err != nil || !stats.Protected || stats.Value != 5 || stats.CompletionRecords != 1 || stats.ClientBoundaries != 1 {
+		t.Fatalf("stats over slot: %+v %v", stats, err)
+	}
+	if reply, err := call(req("c", 3, 1, 3)); err != nil || reply.Value != 6 {
+		t.Fatalf("add after stats: %+v %v", reply, err)
+	}
 }

@@ -51,6 +51,11 @@ type Config struct {
 	Delta           int64
 	Timeout         time.Duration
 	ClientPrefix    string
+	// Transport is "tcp" (net/rpc, default) or "shm" (shared-memory slots in
+	// Region; workers use slots SlotBase.., plus one control slot after them).
+	Transport string
+	Region    string
+	SlotBase  int
 }
 
 type LatencySample struct {
@@ -119,13 +124,31 @@ func (c Config) normalized() Config {
 	if c.ConnectionMode == "" {
 		c.ConnectionMode = ConnectionPerAttempt
 	}
+	if c.Transport == "" {
+		c.Transport = TransportTCP
+	}
 	return c
 }
 
 func (c Config) Validate() error {
 	c = c.normalized()
-	if c.Address == "" || c.Concurrency <= 0 || c.Timeout <= 0 {
-		return errors.New("address, positive concurrency and positive timeout are required")
+	if c.Concurrency <= 0 || c.Timeout <= 0 {
+		return errors.New("positive concurrency and positive timeout are required")
+	}
+	switch c.Transport {
+	case TransportTCP:
+		if c.Address == "" {
+			return errors.New("address is required for tcp transport")
+		}
+	case TransportSHM:
+		if c.Region == "" || c.SlotBase < 0 {
+			return errors.New("shm transport requires a region and a nonnegative slot base")
+		}
+		if c.Implementation != "protected" {
+			return errors.New("shm transport serves only the protected implementation")
+		}
+	default:
+		return errors.New("transport must be tcp or shm")
 	}
 	if c.Requests <= 0 && c.Duration <= 0 {
 		return errors.New("positive requests or duration is required")
@@ -187,7 +210,7 @@ type workerState struct {
 	clients []*clientState
 	next    int
 	random  *rand.Rand
-	caller  *rpcCaller
+	caller  caller
 }
 
 // Run executes one measured experiment. Controlled duplicate scenarios send the
@@ -197,7 +220,15 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err := cfg.Validate(); err != nil {
 		return Result{}, err
 	}
-	states := newWorkerStates(cfg)
+	tr, err := openTransport(cfg)
+	if err != nil {
+		return Result{}, err
+	}
+	defer tr.close()
+	states, err := newWorkerStates(cfg, tr)
+	if err != nil {
+		return Result{}, err
+	}
 	defer closeWorkerCallers(states)
 	if cfg.Warmup > 0 {
 		warm := cfg
@@ -205,19 +236,23 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		warm.Duration = 0
 		warm.Warmup = 0
 		warm.Scenario = ScenarioNormal
-		if _, err := execute(ctx, warm, states); err != nil {
+		if _, err := execute(ctx, warm, tr, states); err != nil {
 			return Result{}, fmt.Errorf("warmup: %w", err)
 		}
 	}
-	return execute(ctx, cfg, states)
+	return execute(ctx, cfg, tr, states)
 }
 
-func newWorkerStates(cfg Config) []*workerState {
+func newWorkerStates(cfg Config, tr transport) ([]*workerState, error) {
 	workers := make([]*workerState, cfg.Concurrency)
 	for worker := range workers {
 		workers[worker] = &workerState{
 			random: rand.New(rand.NewSource(cfg.Seed + int64(worker))),
-			caller: &rpcCaller{address: cfg.Address, timeout: cfg.Timeout, mode: cfg.ConnectionMode},
+		}
+		var err error
+		if workers[worker].caller, err = tr.newCaller(worker); err != nil {
+			closeWorkerCallers(workers[:worker])
+			return nil, err
 		}
 	}
 	for client := 0; client < cfg.VirtualClients; client++ {
@@ -228,7 +263,7 @@ func newWorkerStates(cfg Config) []*workerState {
 		worker := client % cfg.Concurrency
 		workers[worker].clients = append(workers[worker].clients, state)
 	}
-	return workers
+	return workers, nil
 }
 
 func closeWorkerCallers(workers []*workerState) {
@@ -251,8 +286,8 @@ type counters struct {
 	logical       atomic.Int64
 }
 
-func execute(ctx context.Context, cfg Config, states []*workerState) (Result, error) {
-	before, err := stats(ctx, cfg.Address, cfg.Timeout)
+func execute(ctx context.Context, cfg Config, tr transport, states []*workerState) (Result, error) {
+	before, err := tr.stats(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("read initial stats: %w", err)
 	}
@@ -309,7 +344,7 @@ func execute(ctx context.Context, cfg Config, states []*workerState) (Result, er
 	timeline = append(timeline, snapshot(started, &counts))
 	timelineMu.Unlock()
 
-	after, err := stats(ctx, cfg.Address, cfg.Timeout)
+	after, err := tr.stats(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("read final stats: %w", err)
 	}
@@ -404,7 +439,7 @@ func runBatchAckWorker(ctx context.Context, cfg Config, state *workerState, coun
 	}
 }
 
-func perform(ctx context.Context, cfg Config, caller *rpcCaller, req riflrpc.AddRequest, copies int, runUntil time.Time, counts *counters) bool {
+func perform(ctx context.Context, cfg Config, caller caller, req riflrpc.AddRequest, copies int, runUntil time.Time, counts *counters) bool {
 	for copy := 0; copy < copies; copy++ {
 		for {
 			counts.attempts.Add(1)

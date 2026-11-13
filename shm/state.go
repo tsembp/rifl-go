@@ -36,9 +36,11 @@ var codeMessages = map[Code]string{
 
 func (c Code) Error() string { return codeMessages[c] }
 
-// Handler executes one request for the server loop.
+// Handler executes requests for the server loop.
 type Handler interface {
 	Handle(riflrpc.AddRequest) (riflrpc.AddReply, Code)
+	// Stats is read-only and for experiments.
+	Stats() riflrpc.ServiceStats
 }
 
 // State is the RIFL service whose entire state lives in the shared region.

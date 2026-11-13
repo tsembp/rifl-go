@@ -12,7 +12,14 @@ import (
 type CounterHandler struct {
 	Counter interface {
 		Add(riflrpc.AddRequest, *riflrpc.AddReply) error
+		Stats(struct{}, *riflrpc.ServiceStats) error
 	}
+}
+
+func (h CounterHandler) Stats() riflrpc.ServiceStats {
+	var stats riflrpc.ServiceStats
+	h.Counter.Stats(struct{}{}, &stats)
+	return stats
 }
 
 func (h CounterHandler) Handle(req riflrpc.AddRequest) (riflrpc.AddReply, Code) {

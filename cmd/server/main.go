@@ -15,13 +15,32 @@ import (
 	riflrpc "github.com/tsembp/rifl-go"
 )
 
+// heldLock keeps the -standby-lock file open for the process lifetime.
+var heldLock *os.File
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:9000", "TCP listen address")
 	dbPath := flag.String("db", "rifl.db", "durable counter database path")
 	mode := flag.String("mode", "protected", "service mode: protected or baseline")
 	cpuProfile := flag.String("cpuprofile", "", "diagnostics only: write a CPU profile here until SIGINT/SIGTERM")
 	memProfile := flag.String("memprofile", "", "diagnostics only: write an allocation profile here on SIGINT/SIGTERM")
+	standbyLock := flag.String("standby-lock", "", "failover experiments: block on an exclusive flock of this file before opening the database, so a standby takes over when the owner process dies")
 	flag.Parse()
+	if *standbyLock != "" {
+		// Same kernel failure detector as the shared-memory standby. Keep the
+		// file open for the process lifetime; the kernel releases it on death.
+		lock, err := os.OpenFile(*standbyLock, os.O_RDWR|os.O_CREATE, 0600)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("pid %d acquired standby lock %s", os.Getpid(), *standbyLock)
+		// Without a live reference the finalizer would close the file and
+		// silently release the lock while this process still serves.
+		heldLock = lock
+	}
 	var service interface{}
 	var closeService func() error
 	switch strings.ToLower(*mode) {

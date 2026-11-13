@@ -61,12 +61,12 @@ func TestOwnerCrashHelper(t *testing.T) {
 // crashAfterHandle models a lost response: the operation is durable, but the
 // owner dies before writing the reply slot.
 type crashAfterHandle struct {
-	h     Handler
+	Handler
 	crash func()
 }
 
 func (c crashAfterHandle) Handle(r riflrpc.AddRequest) (riflrpc.AddReply, Code) {
-	reply, code := c.h.Handle(r)
+	reply, code := c.Handler.Handle(r)
 	if r.Delta == 99 {
 		c.crash()
 	}

@@ -85,7 +85,11 @@ const (
 	sFirst    = 96
 	sValue    = 104
 	sCode     = 112
+	sOp       = 120 // opAdd or opStats
 	slotSize  = 128
+
+	// A stats reply reuses the request fields: sValue=Value,
+	// sSequence=CompletionRecords, sDelta=ClientBoundaries, sFirst=DatabaseBytes.
 
 	// Client table entry (open addressing, never deleted).
 	cUsed      = 0
@@ -109,6 +113,9 @@ const (
 	slotEmpty   = 0
 	slotRequest = 1
 	slotReply   = 2
+
+	opAdd   = 0
+	opStats = 1
 )
 
 // Region is one process's mapping of the shared file.

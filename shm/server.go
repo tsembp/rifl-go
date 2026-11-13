@@ -59,6 +59,16 @@ func Serve(ctx context.Context, r *Region, h Handler) {
 				continue
 			}
 			worked = true
+			if r.get(slot+sOp) == opStats {
+				stats := h.Stats()
+				r.put(slot+sValue, uint64(stats.Value))
+				r.put(slot+sSequence, uint64(stats.CompletionRecords))
+				r.put(slot+sDelta, uint64(stats.ClientBoundaries))
+				r.put(slot+sFirst, uint64(stats.DatabaseBytes))
+				r.put(slot+sCode, b2u(!stats.Protected)) // 0 protected, 1 baseline
+				atomic.StoreUint64(r.word(slot+sState), slotReply)
+				continue
+			}
 			req := riflrpc.AddRequest{
 				ID:              riflrpc.RequestID{ClientID: r.getID(slot+sIDLen, slot+sID), Sequence: r.get(slot + sSequence)},
 				Delta:           int64(r.get(slot + sDelta)),
@@ -128,6 +138,7 @@ func (c *Client) Call(ctx context.Context, req riflrpc.AddRequest) (riflrpc.AddR
 		}
 		atomic.StoreUint64(r.word(slot+sState), slotEmpty)
 	}
+	r.put(slot+sOp, opAdd)
 	r.putID(slot+sIDLen, slot+sID, req.ID.ClientID)
 	r.put(slot+sSequence, req.ID.Sequence)
 	r.put(slot+sDelta, uint64(req.Delta))
@@ -139,6 +150,31 @@ func (c *Client) Call(ctx context.Context, req riflrpc.AddRequest) (riflrpc.AddR
 		return riflrpc.AddReply{}, err
 	}
 	return c.take(slot)
+}
+
+// Stats asks the owner for read-only service statistics. Use a slot with no
+// request outstanding.
+func (c *Client) Stats(ctx context.Context) (riflrpc.ServiceStats, error) {
+	r, slot := c.r, c.r.slot(c.slot)
+	if c.pending != nil || atomic.LoadUint64(r.word(slot+sState)) != slotEmpty {
+		return riflrpc.ServiceStats{}, CodeInvalid
+	}
+	r.put(slot+sOp, opStats)
+	atomic.StoreUint64(r.word(slot+sState), slotRequest)
+	if err := c.wait(ctx, slot); err != nil {
+		// Stats has no effect; drop it once the owner answers.
+		c.pending = &riflrpc.RequestID{}
+		return riflrpc.ServiceStats{}, err
+	}
+	stats := riflrpc.ServiceStats{
+		Protected:         r.get(slot+sCode) == 0,
+		Value:             int64(r.get(slot + sValue)),
+		CompletionRecords: int(r.get(slot + sSequence)),
+		ClientBoundaries:  int(r.get(slot + sDelta)),
+		DatabaseBytes:     int64(r.get(slot + sFirst)),
+	}
+	atomic.StoreUint64(r.word(slot+sState), slotEmpty)
+	return stats, nil
 }
 
 func (c *Client) wait(ctx context.Context, slot int) error {

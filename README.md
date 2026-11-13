@@ -145,6 +145,17 @@ shared-memory RPC request/reply queues are separate design choices; their recove
 assumptions must be evaluated explicitly. Building such a filesystem is outside
 this project's scope.
 
+### Shared-memory extension
+
+[SHM_DESIGN_PROPOSAL.md](SHM_DESIGN_PROPOSAL.md) describes the CXL-inspired
+extension, implemented in `shm/`. A shared region under `/dev/shm` holds the
+request/reply slots and, in configuration C, the counter, boundaries,
+completion records and a redo log. A standby `cmd/shmserver` process takes over
+when the owner dies. `cmd/bench -transport shm` drives it.
+`scripts/shm/failover.sh` measures failover for A, B and C, and
+`scripts/cloudlab/shm_compare.py` runs the single-node comparison. These are
+process-shared memory measurements on one machine, not CXL hardware results.
+
 ## Run
 
 Requires Go 1.22 or newer. Uses `go.etcd.io/bbolt` for embedded transactional storage.

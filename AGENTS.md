@@ -51,6 +51,25 @@ outside the current implementation.
   lower completion records, and applying the incoming operation share one bbolt
   transaction. Any request below the stored boundary is permanently stale.
 
+## Shared-memory (CXL-inspired) extension
+
+SHM_DESIGN_PROPOSAL.md is the agreed design. The shm package models CXL memory
+as a Linux MAP_SHARED file (/dev/shm) shared by processes on ONE machine:
+
+- Configuration A is the existing TCP + bbolt path; B is shm slots + bbolt
+  (shm.CounterHandler); C keeps the RIFL state in the region (shm.State).
+- shm.State: one owner at a time (flock on the region file; a standby blocks on
+  it). The one-entry redo log's atomic COMMITTED store is the commit point; log
+  values are absolute so recovery reapplies idempotently. Keep mutation, record,
+  boundary advance and reclamation in one log entry.
+- Never evict an unacknowledged record. A full per-client ring returns the
+  ambiguous CodeRetry before execution, never a definitive refusal.
+- Client timeouts leave the request in its slot; retrying the same ID collects
+  that execution. Test-only crash hooks in shm.State must not become controls.
+- Claims: exactly-once across server process crashes and disk-free takeover on
+  one host. Not claimed: CXL hardware performance, multi-host coherence, or
+  power-loss survival for C (CXL memory is not persistent).
+
 ## Scope and correctness
 
 The zero-value Counter is in-memory only. PersistentCounter survives server-process
