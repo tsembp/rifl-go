@@ -1,5 +1,12 @@
 # Handoff: remaining GC evaluation
 
+> **Status: complete (11 November 2026).**
+> - Task 1 and Task 2: benchmark-results/gcfollowup-20261111/REPORT.md.
+> - Fix (schema v3): benchmark-results/composite2-20261111/REPORT.md, merged in
+>   PR #1.
+>
+> This file is kept as the record of the task.
+
 This is the focused task for Spyros's agent. Read AGENTS.md, README.md, and
 AGENT_HANDOFF.md for the existing architecture and correctness invariants.
 The GC optimization, migration, tests and raw benchmark data are in commit

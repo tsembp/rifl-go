@@ -1,6 +1,6 @@
 # Agent Handoff
 
-Last updated: 11 November 2026
+Last updated: 14 November 2026
 
 ## Project objective
 
@@ -101,88 +101,65 @@ Main findings:
 
 The last result exposed a scan bottleneck in commit 6a50b38: processPersistentAck
 walked the entire shared completions-v1 bucket and JSON-decoded every request key.
-The current change uses per-client buckets. Paired client-count and fixed-client
-concurrency sweeps, with raw data and verification, are in benchmark-results/README.md.
-The first sweep improves 1,024-client throughput by 2.70x but regresses at four
-clients. Preserve this trade-off rather than claiming a universal speedup.
+Per-client buckets (v2) fixed the scan, improving 1,024-client throughput by
+2.70x, but regressed by about 16% at four clients. The current flat composite-key
+layout (v3) keeps the scaling and leaves a gap of about 2% at four clients. The
+paired sweeps, with raw data and verification, are listed in
+benchmark-results/README.md. Preserve these trade-offs rather than claiming a
+universal speedup.
 
-## Next work
+## Status and next work
 
-The two-task GC follow-up in [HANDOFF_GC_FOLLOWUP.md](HANDOFF_GC_FOLLOWUP.md) is
-complete. Batch-GC measurements and the four-client diagnosis are in
-benchmark-results/gcfollowup-20261111/REPORT.md: the v2 nested buckets wrote one
-extra 4 KiB page per commit, with CPU per operation unchanged. Schema v3 (flat
-composite keys) removes that page. Its paired three-way comparison is in
-benchmark-results/composite2-20261111/REPORT.md.
+### Done
 
-### 1. Profile remaining overhead and finish GC evaluation
+- **GC follow-up** ([HANDOFF_GC_FOLLOWUP.md](HANDOFF_GC_FOLLOWUP.md)). The
+  batch-GC comparison and four-client diagnosis are in
+  benchmark-results/gcfollowup-20261111/REPORT.md: the v2 nested buckets wrote
+  one extra 4 KiB page per commit, with CPU per operation unchanged.
+- **Schema v3 (flat composite keys).** It removes that page while keeping
+  high-client scaling; see benchmark-results/composite2-20261111/REPORT.md.
+  It was merged to main in PR #1.
+- **Shared-memory (CXL-inspired) extension**, as designed in
+  SHM_DESIGN_PROPOSAL.md: configurations A (TCP + bbolt), B (shm slots + bbolt)
+  and C (shm slots + shm state), with owner/standby takeover. It is on branch
+  `shm-design`, PR #2. Results, all on one CloudLab d430 node:
+  - benchmark-results/shm-20261113: throughput, batch acknowledgement and a
+    first failover run.
+  - benchmark-results/shm-failover-20261113: 20-repetition takeover timing.
+    It also corrects the first run's reading of the longest request as the
+    takeover.
+  - benchmark-results/shm-tmpfs-20261114: A and B with the bbolt file on
+    `/dev/shm`, a stand-in for the instructor's suggestion of bbolt on a
+    filesystem backed by CXL memory.
+- **The failover limitation is documented in README.md.** The message-based
+  version supports a restart or a standby on the same machine
+  (`cmd/server -standby-lock`), not failover to another machine.
 
-Implemented: completions-v3 is one flat bucket whose keys are the client-ID
-length, client ID and 8-byte big-endian sequence (v2 used nested per-client
-buckets and is migrated automatically). Durable GC only visits that client's reclaimable records.
-The RPC protocol and JSON completion values are unchanged. The in-memory counter
-retains its original map-based implementation.
+### Remaining
 
-The change includes:
-
-- schema version 3 and atomic migration of both older unversioned layouts and v2;
-- atomic lookup, insertion, acknowledgement advancement, and deletion;
-- correct `Stats` accounting of completion keys;
-- tests for migration, duplicate replay, stale protection, crash boundaries,
-  blocked gaps, and multiple clients;
-- unchanged durability settings and invariants listed above.
-
-Review store.go, schema.go, gc_test.go, schema_test.go and the adapted store_test.go.
-The maintainers authorized the paired client-count and concurrency measurements.
-The concurrency sweep keeps 64 clients fixed while varying workers, so it differs
-from the old experiment where worker and client counts increased together.
-
-Completed paired sweeps:
-
-- active clients: 4, 16, 64, 256, and 1,024 with four workers;
-- concurrency: 1, 4, 16, 32, and 64 workers with 64 fixed clients.
-
-Remaining measurements:
-
-- acknowledgement/GC and blocked-gap scenarios;
-- batch acknowledgement at 100, 1,000, and 10,000 records.
-
-Use the same CloudLab node type, duration, repeat count, payload, storage sync,
-and connection settings as the existing results. Keep the old results rather
-than overwriting them, and report before/after medians.
-
-### 2. Add a small financial workload
-
-Add an account-transfer service as a second non-idempotent workload. Keep its
-scope small: durable account balances, validation, and atomic transfer plus
-completion recording. Do not build an exchange, order book, UI, or real trading
-integration. Reuse the logical request, retry, acknowledgement, and stale-request
-rules instead of creating a separate reliability protocol.
-
-### 3. Implement the CXL/shared-memory comparison
-
-The planned next phase is a shared-memory transport between Go processes,
-inspired by CXL-SHM. Treat CXL as process-shared memory for the prototype; do not
-claim CXL hardware measurements unless real CXL hardware is used. First define
-the request/reply queues, ownership rules, synchronization primitives, crash
-recovery metadata, and how saved results and acknowledgements remain durable.
-Then compare the message-based and shared-memory versions using equivalent
-workloads and durability assumptions.
-
-### 4. Update documentation and prepare the final report
-
-README.md now links the completed paired sweeps through benchmark-results/README.md.
-Add the follow-up findings there without overwriting historical data. The final
-report should distinguish measured facts from future work and retain the
-limitations in EXPERIMENT_RESULTS.md.
+1. **Final report.** Check the course rules with the team first. Build it from
+   the REPORT.md files above, distinguishing measured facts from future work and
+   keeping the limitations.
+2. **Optional: a small financial workload.** An account-transfer service as a
+   second non-idempotent workload: durable balances, validation, and an atomic
+   transfer plus completion record. It should reuse the existing request,
+   retry, acknowledgement and stale-request rules. No exchange, order book, UI
+   or trading integration.
+3. **Not implemented (future work):**
+   - Cross-machine takeover. It needs a lease or fencing mechanism in place of
+     the local `flock`, and storage the replacement machine can reach.
+   - Leases for reclaiming per-client boundaries.
 
 ## Repository state at handoff
 
-Spyros's implementation and experiment tooling are committed in 6a50b38. The
-per-client GC work, migration tests, README clarification and both paired benchmark
-datasets (including raw archives) are committed in b561748. Review git status
-before staging; leave unrelated IDE files and databases alone. Preserve committed
-measurement data and put follow-up experiments in a separate results folder.
+- main includes PR #1: schema v3 and the GC follow-up results.
+- Branch `shm-design` (PR #2, open) adds the shared-memory package, the
+  `cmd/shmserver` owner/standby server, `cmd/bench -transport shm`,
+  scripts/shm/failover.sh, scripts/cloudlab/shm_compare.py and the three shm
+  result folders.
+- The full raw archive of shm-20261113 (about 434 MB) exceeds GitHub's file
+  limit. Only `results-reduced.tar.gz` is committed.
 
-Do not commit, push, add dependencies, or change the project scope without the
-maintainers' approval.
+Preserve committed measurement data and put new experiments in a new results
+folder. Do not commit, push, add dependencies, or change the project scope
+without the maintainers' approval.
