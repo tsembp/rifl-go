@@ -140,12 +140,13 @@ class Runner:
         (self.local / 'node-environment.txt').write_text(env)
         manifest = dict(run=self.a.run_id, node=self.a.node, data_dir=self.data, region_dir='/dev/shm',
                         build=json.loads((self.build_dir / 'build.json').read_text()),
-                        configs={'A': 'TCP loopback + bbolt', 'B': 'shm slots + bbolt', 'C': 'shm slots + shm state'},
+                        configs={k: v for k, v in {'A': 'TCP loopback + bbolt', 'B': 'shm slots + bbolt',
+                                                   'C': 'shm slots + shm state'}.items() if k in self.a.configs},
                         throughput=dict(clients=[4, 1024], workers=4, duration_seconds=15, warmup=2048,
                                         repeats=self.a.repeats, payload_bytes=100),
                         batch=dict(records_per_client=[100, 1000, 10000], workers=[1, 4], repeats=self.a.repeats),
                         failover=dict(duration='10s', kill_after_seconds=5, workers=4, clients=4,
-                                      repeats=self.a.repeats, signal='SIGKILL'),
+                                      repeats=self.a.failover_repeats or self.a.repeats, signal='SIGKILL'),
                         storage_sync='bbolt defaults', order='rotates by point and repeat')
         (self.local / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         self.log('setup complete')
@@ -194,15 +195,16 @@ class Runner:
                  f'ack_p50={row["batch_ack_p50_ms"]}ms completions={row["completions_after"]}')
 
     def ordered(self, n):
-        shift = n % len(CONFIGS)
-        return CONFIGS[shift:] + CONFIGS[:shift]
+        configs = self.a.configs
+        shift = n % len(configs)
+        return configs[shift:] + configs[:shift]
 
     def smoke(self):
-        for config in CONFIGS:
+        for config in self.a.configs:
             self.point(config, f'smoke-{config}', ['-scenario', 'normal', '-requests', '400', '-concurrency', '4',
                        '-virtual-clients', '4', '-warmup', '16'], 'smoke',
                        lambda r: [] if int(r['completions_after']) == 4 else ['completions'], 8, 64)
-        self.log('smoke passed for A, B and C')
+        self.log('smoke passed for ' + ', '.join(self.a.configs))
 
     def throughput(self):
         n = 0
@@ -235,7 +237,7 @@ class Runner:
         self.log('batch complete')
 
     def failover(self):
-        for repeat in range(1, self.a.repeats + 1):
+        for repeat in range(1, (self.a.failover_repeats or self.a.repeats) + 1):
             for config in self.ordered(repeat):
                 tag = f'failover-{config}-r{repeat}'
                 if tag in self.completed():
@@ -279,6 +281,9 @@ def main():
     parser.add_argument('--data-dir', default='/var/tmp', help='disk directory for bbolt files')
     parser.add_argument('--out', help='local results folder (default benchmark-results/<run-id>)')
     parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument('--failover-repeats', type=int, help='failover repetitions (default --repeats)')
+    parser.add_argument('--configs', default='ABC', type=lambda v: [c for c in v.upper() if c in CONFIGS],
+                        help='subset of A, B, C to run, e.g. AB')
     parser.add_argument('--no-failover-latency', dest='failover_latency', action='store_false',
                         help='skip per-request latency files in failover runs (summary keeps p50..max)')
     parser.add_argument('phases', nargs='+',

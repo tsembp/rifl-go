@@ -1,0 +1,128 @@
+2026-11-14T08:01:27Z setup complete
+2026-11-14T08:01:32Z smoke-A: 8897.7 ops/s p50=0.440866ms p99=1.376414ms ack_p50=0.000000ms completions=4
+2026-11-14T08:01:36Z smoke-B: 20311.8 ops/s p50=0.173675ms p99=1.130459ms ack_p50=0.000000ms completions=4
+2026-11-14T08:01:36Z smoke passed for A, B
+2026-11-14T08:01:57Z thr-B-v4-r1: 20299.1 ops/s p50=0.162880ms p99=0.718978ms ack_p50=0.000000ms completions=4
+2026-11-14T08:02:17Z thr-A-v4-r1: 7692.5 ops/s p50=0.521601ms p99=1.540725ms ack_p50=0.000000ms completions=4
+2026-11-14T08:02:37Z thr-A-v4-r2: 7731.4 ops/s p50=0.519162ms p99=1.510440ms ack_p50=0.000000ms completions=4
+2026-11-14T08:02:57Z thr-B-v4-r2: 19924.2 ops/s p50=0.166273ms p99=0.712503ms ack_p50=0.000000ms completions=4
+2026-11-14T08:03:18Z thr-B-v4-r3: 20612.4 ops/s p50=0.159676ms p99=0.720199ms ack_p50=0.000000ms completions=4
+2026-11-14T08:03:38Z thr-A-v4-r3: 7787.3 ops/s p50=0.514279ms p99=1.528254ms ack_p50=0.000000ms completions=4
+2026-11-14T08:03:58Z thr-A-v4-r4: 7757.9 ops/s p50=0.516468ms p99=1.533313ms ack_p50=0.000000ms completions=4
+2026-11-14T08:04:19Z thr-B-v4-r4: 19911.8 ops/s p50=0.166845ms p99=0.725355ms ack_p50=0.000000ms completions=4
+2026-11-14T08:04:40Z thr-B-v4-r5: 21394.9 ops/s p50=0.155171ms p99=0.683479ms ack_p50=0.000000ms completions=4
+2026-11-14T08:05:00Z thr-A-v4-r5: 7768.5 ops/s p50=0.515751ms p99=1.537685ms ack_p50=0.000000ms completions=4
+2026-11-14T08:05:20Z thr-A-v1024-r1: 5578.2 ops/s p50=0.711258ms p99=1.919233ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:05:40Z thr-B-v1024-r1: 10813.1 ops/s p50=0.311083ms p99=1.240728ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:06:00Z thr-B-v1024-r2: 10659.9 ops/s p50=0.313956ms p99=1.233310ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:06:21Z thr-A-v1024-r2: 5552.6 ops/s p50=0.710765ms p99=1.930309ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:06:41Z thr-A-v1024-r3: 5509.6 ops/s p50=0.716628ms p99=1.931150ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:07:02Z thr-B-v1024-r3: 10741.0 ops/s p50=0.313329ms p99=1.244756ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:07:22Z thr-B-v1024-r4: 10560.2 ops/s p50=0.316172ms p99=1.246575ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:07:43Z thr-A-v1024-r4: 5471.7 ops/s p50=0.723607ms p99=1.939340ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:08:03Z thr-A-v1024-r5: 5583.8 ops/s p50=0.700042ms p99=1.966318ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:08:24Z thr-B-v1024-r5: 10661.9 ops/s p50=0.317634ms p99=1.232371ms ack_p50=0.000000ms completions=1024
+2026-11-14T08:08:24Z throughput complete
+2026-11-14T08:08:29Z batch-B-b100-w1-r1: 11766.1 ops/s p50=0.074731ms p99=0.148566ms ack_p50=0.125325ms completions=1
+2026-11-14T08:08:33Z batch-A-b100-w1-r1: 3108.1 ops/s p50=0.285881ms p99=0.540431ms ack_p50=0.540431ms completions=1
+2026-11-14T08:08:38Z batch-A-b100-w1-r2: 4434.5 ops/s p50=0.208734ms p99=0.364910ms ack_p50=0.364910ms completions=1
+2026-11-14T08:08:42Z batch-B-b100-w1-r2: 11101.6 ops/s p50=0.075765ms p99=0.202196ms ack_p50=0.106504ms completions=1
+2026-11-14T08:08:46Z batch-B-b100-w1-r3: 11298.0 ops/s p50=0.078371ms p99=0.192865ms ack_p50=0.157142ms completions=1
+2026-11-14T08:08:50Z batch-A-b100-w1-r3: 4960.9 ops/s p50=0.182576ms p99=0.438466ms ack_p50=0.201776ms completions=1
+2026-11-14T08:08:55Z batch-A-b100-w1-r4: 2675.7 ops/s p50=0.370021ms p99=0.527159ms ack_p50=0.527159ms completions=1
+2026-11-14T08:08:59Z batch-B-b100-w1-r4: 7584.1 ops/s p50=0.076495ms p99=1.492716ms ack_p50=0.132645ms completions=1
+2026-11-14T08:09:04Z batch-B-b100-w1-r5: 11268.1 ops/s p50=0.070268ms p99=0.358680ms ack_p50=0.101125ms completions=1
+2026-11-14T08:09:08Z batch-A-b100-w1-r5: 3451.3 ops/s p50=0.264790ms p99=0.458972ms ack_p50=0.340859ms completions=1
+2026-11-14T08:09:13Z batch-A-b100-w4-r1: 6713.6 ops/s p50=0.569449ms p99=1.953539ms ack_p50=0.314970ms completions=4
+2026-11-14T08:09:18Z batch-B-b100-w4-r1: 15815.3 ops/s p50=0.224797ms p99=0.781541ms ack_p50=0.432854ms completions=4
+2026-11-14T08:09:22Z batch-B-b100-w4-r2: 14281.7 ops/s p50=0.246342ms p99=0.926801ms ack_p50=0.316558ms completions=4
+2026-11-14T08:09:27Z batch-A-b100-w4-r2: 7388.9 ops/s p50=0.472393ms p99=2.027966ms ack_p50=0.416974ms completions=4
+2026-11-14T08:09:32Z batch-A-b100-w4-r3: 6697.7 ops/s p50=0.564661ms p99=2.041295ms ack_p50=0.354394ms completions=4
+2026-11-14T08:09:37Z batch-B-b100-w4-r3: 13875.6 ops/s p50=0.252775ms p99=0.948777ms ack_p50=0.368403ms completions=4
+2026-11-14T08:09:42Z batch-B-b100-w4-r4: 16509.0 ops/s p50=0.195588ms p99=0.941223ms ack_p50=0.263180ms completions=4
+2026-11-14T08:09:47Z batch-A-b100-w4-r4: 6915.9 ops/s p50=0.542852ms p99=1.979503ms ack_p50=0.695474ms completions=4
+2026-11-14T08:09:52Z batch-A-b100-w4-r5: 8485.4 ops/s p50=0.427367ms p99=1.879683ms ack_p50=0.304130ms completions=4
+2026-11-14T08:09:56Z batch-B-b100-w4-r5: 11983.7 ops/s p50=0.280123ms p99=1.774674ms ack_p50=0.202780ms completions=4
+2026-11-14T08:10:01Z batch-B-b1000-w1-r1: 11403.1 ops/s p50=0.063841ms p99=0.730447ms ack_p50=0.730447ms completions=1
+2026-11-14T08:10:06Z batch-A-b1000-w1-r1: 3611.0 ops/s p50=0.241871ms p99=0.624618ms ack_p50=1.083502ms completions=1
+2026-11-14T08:10:11Z batch-A-b1000-w1-r2: 2963.1 ops/s p50=0.314740ms p99=0.595714ms ack_p50=1.006329ms completions=1
+2026-11-14T08:10:16Z batch-B-b1000-w1-r2: 10019.6 ops/s p50=0.067465ms p99=1.475519ms ack_p50=1.797864ms completions=1
+2026-11-14T08:10:20Z batch-B-b1000-w1-r3: 12427.4 ops/s p50=0.064076ms p99=0.479439ms ack_p50=0.685824ms completions=1
+2026-11-14T08:10:26Z batch-A-b1000-w1-r3: 2889.9 ops/s p50=0.311449ms p99=0.655734ms ack_p50=2.092542ms completions=1
+2026-11-14T08:10:31Z batch-A-b1000-w1-r4: 3262.3 ops/s p50=0.283023ms p99=0.669030ms ack_p50=0.957910ms completions=1
+2026-11-14T08:10:36Z batch-B-b1000-w1-r4: 13111.5 ops/s p50=0.061063ms p99=0.445736ms ack_p50=0.563043ms completions=1
+2026-11-14T08:10:41Z batch-B-b1000-w1-r5: 12974.2 ops/s p50=0.061636ms p99=0.398361ms ack_p50=0.553238ms completions=1
+2026-11-14T08:10:46Z batch-A-b1000-w1-r5: 2919.2 ops/s p50=0.325539ms p99=0.570631ms ack_p50=1.002738ms completions=1
+2026-11-14T08:10:51Z batch-A-b1000-w4-r1: 6160.9 ops/s p50=0.610287ms p99=1.857788ms ack_p50=1.088525ms completions=4
+2026-11-14T08:10:56Z batch-B-b1000-w4-r1: 14567.8 ops/s p50=0.237546ms p99=1.072146ms ack_p50=1.917234ms completions=4
+2026-11-14T08:11:01Z batch-B-b1000-w4-r2: 12558.3 ops/s p50=0.274574ms p99=1.193468ms ack_p50=3.563132ms completions=4
+2026-11-14T08:11:07Z batch-A-b1000-w4-r2: 6189.4 ops/s p50=0.624380ms p99=1.788201ms ack_p50=0.995350ms completions=4
+2026-11-14T08:11:12Z batch-A-b1000-w4-r3: 6079.7 ops/s p50=0.631766ms p99=1.974079ms ack_p50=1.406825ms completions=4
+2026-11-14T08:11:17Z batch-B-b1000-w4-r3: 14882.3 ops/s p50=0.240695ms p99=0.886515ms ack_p50=2.638534ms completions=4
+2026-11-14T08:11:22Z batch-B-b1000-w4-r4: 13989.6 ops/s p50=0.249100ms p99=0.979727ms ack_p50=2.682712ms completions=4
+2026-11-14T08:11:28Z batch-A-b1000-w4-r4: 6117.4 ops/s p50=0.634893ms p99=1.892332ms ack_p50=0.982362ms completions=4
+2026-11-14T08:11:33Z batch-A-b1000-w4-r5: 6096.6 ops/s p50=0.605509ms p99=1.860948ms ack_p50=1.159888ms completions=4
+2026-11-14T08:11:39Z batch-B-b1000-w4-r5: 13618.3 ops/s p50=0.252268ms p99=1.168389ms ack_p50=2.536652ms completions=4
+2026-11-14T08:11:45Z batch-B-b10000-w1-r1: 9925.1 ops/s p50=0.078134ms p99=0.535637ms ack_p50=8.340350ms completions=1
+2026-11-14T08:11:54Z batch-A-b10000-w1-r1: 2655.5 ops/s p50=0.375097ms p99=0.689443ms ack_p50=7.320969ms completions=1
+2026-11-14T08:12:02Z batch-A-b10000-w1-r2: 2553.8 ops/s p50=0.417076ms p99=0.675213ms ack_p50=8.181346ms completions=1
+2026-11-14T08:12:08Z batch-B-b10000-w1-r2: 10448.3 ops/s p50=0.076640ms p99=0.497726ms ack_p50=8.112732ms completions=1
+2026-11-14T08:12:14Z batch-B-b10000-w1-r3: 10339.5 ops/s p50=0.076629ms p99=0.478709ms ack_p50=7.229516ms completions=1
+2026-11-14T08:12:23Z batch-A-b10000-w1-r3: 2492.9 ops/s p50=0.415852ms p99=0.698441ms ack_p50=8.771860ms completions=1
+2026-11-14T08:12:32Z batch-A-b10000-w1-r4: 2568.3 ops/s p50=0.392127ms p99=0.668099ms ack_p50=7.455540ms completions=1
+2026-11-14T08:12:37Z batch-B-b10000-w1-r4: 9913.2 ops/s p50=0.077120ms p99=0.594652ms ack_p50=7.107701ms completions=1
+2026-11-14T08:12:43Z batch-B-b10000-w1-r5: 10531.6 ops/s p50=0.077280ms p99=0.487234ms ack_p50=9.109994ms completions=1
+2026-11-14T08:12:52Z batch-A-b10000-w1-r5: 2625.7 ops/s p50=0.381684ms p99=0.680203ms ack_p50=8.659713ms completions=1
+2026-11-14T08:13:04Z batch-A-b10000-w4-r1: 5631.9 ops/s p50=0.689076ms p99=1.997524ms ack_p50=8.726721ms completions=4
+2026-11-14T08:13:13Z batch-B-b10000-w4-r1: 11182.4 ops/s p50=0.300173ms p99=1.251085ms ack_p50=8.663838ms completions=4
+2026-11-14T08:13:21Z batch-B-b10000-w4-r2: 11635.8 ops/s p50=0.284866ms p99=1.222821ms ack_p50=7.580828ms completions=4
+2026-11-14T08:13:34Z batch-A-b10000-w4-r2: 5631.6 ops/s p50=0.683363ms p99=1.958198ms ack_p50=9.398527ms completions=4
+2026-11-14T08:13:46Z batch-A-b10000-w4-r3: 5561.8 ops/s p50=0.693344ms p99=1.970663ms ack_p50=9.076368ms completions=4
+2026-11-14T08:13:55Z batch-B-b10000-w4-r3: 10951.2 ops/s p50=0.308216ms p99=1.276984ms ack_p50=8.627099ms completions=4
+2026-11-14T08:14:04Z batch-B-b10000-w4-r4: 11060.5 ops/s p50=0.299362ms p99=1.287182ms ack_p50=7.218443ms completions=4
+2026-11-14T08:14:16Z batch-A-b10000-w4-r4: 5729.4 ops/s p50=0.673965ms p99=1.919427ms ack_p50=8.296656ms completions=4
+2026-11-14T08:14:28Z batch-A-b10000-w4-r5: 5581.0 ops/s p50=0.692580ms p99=1.980978ms ack_p50=7.969044ms completions=4
+2026-11-14T08:14:36Z batch-B-b10000-w4-r5: 11134.3 ops/s p50=0.301604ms p99=1.244933ms ack_p50=6.581923ms completions=4
+2026-11-14T08:14:36Z batch complete
+2026-11-14T08:14:50Z failover-B-r1: max=2.829957ms p50=0.164370ms lock=2.421ms ready=2.79ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:15:05Z failover-A-r1: max=5.778062ms p50=0.517152ms lock=2.919ms ready=3.663ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:15:19Z failover-A-r2: max=5.589996ms p50=0.513031ms lock=2.788ms ready=3.415ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:15:34Z failover-B-r2: max=2.745647ms p50=0.163227ms lock=1.877ms ready=2.427ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:15:48Z failover-B-r3: max=3.659934ms p50=0.164151ms lock=3.233ms ready=3.524ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:16:03Z failover-A-r3: max=6.208300ms p50=0.515070ms lock=2.939ms ready=3.715ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:16:17Z failover-A-r4: max=5.770927ms p50=0.514173ms lock=2.713ms ready=3.489ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:16:32Z failover-B-r4: max=2.653999ms p50=0.163198ms lock=2.179ms ready=2.36ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:16:47Z failover-B-r5: max=2.760170ms p50=0.157831ms lock=1.78ms ready=2.105ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:17:02Z failover-A-r5: max=6.321234ms p50=0.518671ms lock=2.771ms ready=3.56ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:17:17Z failover-A-r6: max=5.730843ms p50=0.512236ms lock=3.024ms ready=3.897ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:17:32Z failover-B-r6: max=2.763670ms p50=0.158417ms lock=1.899ms ready=2.245ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:17:48Z failover-B-r7: max=2.577063ms p50=0.158611ms lock=1.946ms ready=2.409ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:18:03Z failover-A-r7: max=5.765664ms p50=0.517490ms lock=2.602ms ready=3.451ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:18:18Z failover-A-r8: max=5.974467ms p50=0.514810ms lock=3.089ms ready=3.942ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:18:33Z failover-B-r8: max=2.642447ms p50=0.162005ms lock=2.089ms ready=2.406ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:18:48Z failover-B-r9: max=2.601687ms p50=0.157200ms lock=1.675ms ready=2.011ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:19:03Z failover-A-r9: max=5.602424ms p50=0.521931ms lock=2.91ms ready=3.718ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:19:18Z failover-A-r10: max=6.095291ms p50=0.515688ms lock=2.752ms ready=3.693ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:19:33Z failover-B-r10: max=3.791768ms p50=0.159591ms lock=2.208ms ready=2.492ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:19:49Z failover-B-r11: max=3.616602ms p50=0.158909ms lock=2.814ms ready=3.35ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:20:03Z failover-A-r11: max=5.905167ms p50=0.516732ms lock=2.816ms ready=3.616ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:20:18Z failover-A-r12: max=5.499964ms p50=0.513114ms lock=2.513ms ready=3.221ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:20:33Z failover-B-r12: max=2.381950ms p50=0.158297ms lock=1.792ms ready=2.051ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:20:48Z failover-B-r13: max=3.671268ms p50=0.161069ms lock=2.113ms ready=2.516ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:21:03Z failover-A-r13: max=5.702092ms p50=0.513459ms lock=2.592ms ready=3.337ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:21:18Z failover-A-r14: max=5.487373ms p50=0.513014ms lock=2.363ms ready=3.088ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:21:33Z failover-B-r14: max=3.070815ms p50=0.154187ms lock=2.638ms ready=2.939ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:21:47Z failover-B-r15: max=3.177835ms p50=0.163189ms lock=2.155ms ready=2.634ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:22:03Z failover-A-r15: max=5.725499ms p50=0.517917ms lock=2.719ms ready=3.468ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:22:17Z failover-A-r16: max=5.973069ms p50=0.515400ms lock=2.558ms ready=3.442ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:22:31Z failover-B-r16: max=3.213948ms p50=0.159550ms lock=2.641ms ready=3.085ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:22:46Z failover-B-r17: max=2.972549ms p50=0.157616ms lock=2.453ms ready=2.742ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:23:00Z failover-A-r17: max=5.287844ms p50=0.513108ms lock=2.728ms ready=3.631ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:23:14Z failover-A-r18: max=5.482214ms p50=0.514807ms lock=2.576ms ready=3.379ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:23:29Z failover-B-r18: max=3.650569ms p50=0.162365ms lock=2.215ms ready=2.497ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:23:44Z failover-B-r19: max=2.499609ms p50=0.163689ms lock=2.215ms ready=2.441ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:23:59Z failover-A-r19: max=6.105661ms p50=0.515427ms lock=2.992ms ready=3.659ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:24:13Z failover-A-r20: max=5.714247ms p50=0.514563ms lock=2.738ms ready=3.405ms retried_attempts=4 errors=0 duplicates=0
+2026-11-14T08:24:28Z failover-B-r20: max=2.758872ms p50=0.158687ms lock=2.515ms ready=2.757ms retried_attempts=0 errors=0 duplicates=0
+2026-11-14T08:24:28Z failover complete
+2026-11-14T08:25:49Z raw results downloaded

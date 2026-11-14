@@ -1,0 +1,57 @@
+{
+  "run": "shm-tmpfs-20261114",
+  "node": "SpyrosG@pc755.emulab.net",
+  "data_dir": "/dev/shm/shm-tmpfs-20261114",
+  "region_dir": "/dev/shm",
+  "build": {
+    "head": "d6869092cc103637aa7989194341573fa02118e2",
+    "note": "HEAD plus working-tree.patch; exact source in source.tar.gz",
+    "compiler": "go version go1.27.0 linux/amd64",
+    "cgo": false,
+    "buildvcs": false,
+    "sha256": {
+      "rifl-bench": "eb34b6e967fc93470129694426875e4ff05b8577da05990a6de398026315f347",
+      "rifl-server": "022d28a4b7ea82ce46e0e1d58183b03b32fa6a4a22371c8e01e01bb2747c0973",
+      "rifl-shmserver": "a2997a287551257087a9b4cb4b1c4115830c3f941061162d74b6d070f4b7599e",
+      "source.tar.gz": "cba438b0bf5022d633e86300b35227fd0cb3ec677dcdee5f3b558775cad7bd8b",
+      "working-tree.patch": "c7f8a79e3d8ca799a1ca8cd88458c0053ec849e1fbea286ea2dd2d3a81922679"
+    }
+  },
+  "configs": {
+    "A": "TCP loopback + bbolt",
+    "B": "shm slots + bbolt"
+  },
+  "throughput": {
+    "clients": [
+      4,
+      1024
+    ],
+    "workers": 4,
+    "duration_seconds": 15,
+    "warmup": 2048,
+    "repeats": 5,
+    "payload_bytes": 100
+  },
+  "batch": {
+    "records_per_client": [
+      100,
+      1000,
+      10000
+    ],
+    "workers": [
+      1,
+      4
+    ],
+    "repeats": 5
+  },
+  "failover": {
+    "duration": "10s",
+    "kill_after_seconds": 5,
+    "workers": 4,
+    "clients": 4,
+    "repeats": 20,
+    "signal": "SIGKILL"
+  },
+  "storage_sync": "bbolt defaults",
+  "order": "rotates by point and repeat"
+}

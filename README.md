@@ -47,7 +47,8 @@ with the same database to replay results without repeating their side effects.
 The guarantee assumes the database remains intact and the filesystem/device honors
 sync operations. bbolt's default synchronization stays enabled. Tests cover process
 crashes, not power failures or storage corruption. One process owns the database;
-another opener fails after a bounded lock wait. There is no replication or failover.
+another opener fails after a bounded lock wait. There is no replication and no
+failover to another machine; see the next sections for same-machine takeover.
 The zero-value `Counter` still uses memory only and loses everything on restart;
 `OpenCounter(path)` creates the persistent service used by the server CLI.
 
@@ -127,14 +128,29 @@ transaction. Boundaries are not evicted, and sync settings remain unchanged.
 ### Recovery, failover, and the shared-memory study
 
 The instructor confirmed that cross-server failover may remain a documented
-limitation of the message-based RIFL-inspired implementation. Current recovery
-means restarting the server with the same local database. bbolt does not provide
-replication, leader election, or automatic takeover by another machine.
+limitation of the message-based RIFL-inspired implementation, and that failover
+should be studied in the shared-memory implementation.
 
-The shared-memory phase will study how a replacement process or compute node
-could access surviving application state, completion records, and acknowledgement
-boundaries. Shared state alone does not provide safe takeover: ownership and
-failure handling must ensure that only one active server modifies the database.
+**Limitation of the message-based implementation.** bbolt does not provide
+replication, leader election, or takeover by another machine, and the database
+file lives on one machine's local disk. Recovery therefore means a new server
+process *on the same machine* opening the same database: either a restart, or a
+standby started with `cmd/server -standby-lock`, which blocks on a kernel
+`flock` and takes over when the owner process dies. Clients see broken TCP
+connections and retry with the same request IDs; the saved completion records
+make those retries exactly-once. Failover to a server on a different machine is
+not supported.
+
+**Failover in the shared-memory implementation.** Configurations B and C keep
+requests in shared-memory slots, so a standby that takes over answers the
+in-flight requests without any client retry. In C the RIFL state is also in
+shared memory, so the standby needs no disk. Shared state alone does not make
+takeover safe: one owner at a time is enforced by the same `flock`, and C's
+redo log makes a crash at any point recoverable. Measured on one CloudLab node
+over 20 SIGKILLs per configuration, the standby was serving a median of
+3.69 ms (A), 2.61 ms (B) and 2.11 ms (C) after the kill, with zero errors and
+zero duplicate effects
+([report](benchmark-results/shm-failover-20261113/REPORT.md)).
 
 As suggested by the instructor, bbolt could remain the storage layer if a suitable
 filesystem exposes files backed by CXL memory. This is a conditional architectural
@@ -144,6 +160,14 @@ is not inherently persistent across power loss. A CXL-backed database file and
 shared-memory RPC request/reply queues are separate design choices; their recovery
 assumptions must be evaluated explicitly. Building such a filesystem is outside
 this project's scope.
+
+As a stand-in, we ran the unmodified A and B servers with the bbolt file on
+`/dev/shm`, a filesystem in RAM. bbolt still syncs on every commit; the sync is
+just cheap there. Throughput rose 3.4–8.8× over the disk runs, and exactly-once
+effects held across 40 standby takeovers. bbolt itself then becomes the cost:
+B on tmpfs is still 18–31× slower than C's purpose-built shared-memory state.
+tmpfs is local DRAM, so this is an optimistic bound, not a CXL measurement
+([report](benchmark-results/shm-tmpfs-20261114/REPORT.md)).
 
 ### Shared-memory extension
 
@@ -219,8 +243,9 @@ bare-metal profile and native deployment workflow are in
 
 ## Next steps
 
-1. Design and build the shared-memory (CXL-inspired) comparison; see
-   [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+1. Cross-machine takeover (the CXL setting) would need a lease or fencing
+   mechanism in place of the local `flock`, and storage reachable from the
+   replacement machine; it is not implemented.
 2. Add a small financial demonstration if time permits.
 
 ## References
