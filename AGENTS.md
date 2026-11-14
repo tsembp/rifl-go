@@ -69,6 +69,18 @@ as a Linux MAP_SHARED file (/dev/shm) shared by processes on ONE machine:
 - Claims: exactly-once across server process crashes and disk-free takeover on
   one host. Not claimed: CXL hardware performance, multi-host coherence, or
   power-loss survival for C (CXL memory is not persistent).
+- cmd/server -standby-lock gives A the same flock standby. Both servers log
+  microsecond UTC timestamps, so the runner can record kill -> lock and
+  kill -> serving per run. Measure takeover with these, not with the longest
+  request: the longest request was mostly unrelated disk or scheduling stalls.
+  That was a correction to shm-20261113.
+- Results are in benchmark-results/shm-20261113 (A/B/C),
+  shm-failover-20261113 (20-repetition takeover) and shm-tmpfs-20261114 (A/B
+  with bbolt on /dev/shm, a stand-in for a CXL-backed filesystem; not a CXL
+  measurement).
+- Keep C's per-request latency files out of git: they reach GBs. Failover runs
+  use --no-failover-latency.
+- Refer to course staff only as "the instructor".
 
 ## Scope and correctness
 
