@@ -1,0 +1,130 @@
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+index 31f44b0..79775d4 100644
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -26,6 +26,8 @@ func main() {
+ 	memProfile := flag.String("memprofile", "", "diagnostics only: write an allocation profile here on SIGINT/SIGTERM")
+ 	standbyLock := flag.String("standby-lock", "", "failover experiments: block on an exclusive flock of this file before opening the database, so a standby takes over when the owner process dies")
+ 	flag.Parse()
++	// Microsecond UTC timestamps let failover runs time the standby's takeover.
++	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.LUTC)
+ 	if *standbyLock != "" {
+ 		// Same kernel failure detector as the shared-memory standby. Keep the
+ 		// file open for the process lifetime; the kernel releases it on death.
+diff --git a/scripts/cloudlab/shm_compare.py b/scripts/cloudlab/shm_compare.py
+index d4470c3..5248616 100755
+--- a/scripts/cloudlab/shm_compare.py
++++ b/scripts/cloudlab/shm_compare.py
+@@ -25,11 +25,43 @@ from pathlib import Path
+ import shlex
+ import shutil
+ import subprocess
++import re
+ import time
++from datetime import datetime, timezone
+ 
+ REPO = Path(__file__).resolve().parents[2]
+ GO = os.environ.get('GO', 'go')
+ CONFIGS = ['A', 'B', 'C']
++LOG_TIME = re.compile(r'^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6}) ')
++
++
++def parse_log_time(line):
++    match = LOG_TIME.match(line)
++    if not match:
++        raise ValueError('log line without a microsecond UTC timestamp: ' + line)
++    return datetime.strptime(match.group(1), '%Y/%m/%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
++
++
++def takeover_times(config, kill_text, standby_log):
++    """Milliseconds from the recorded kill to the standby holding the lock and
++    to it serving. A: lock line, then the listening line. B/C: one line logged
++    when ready, which also carries the acquisition time."""
++    whole, _, fraction = kill_text.strip().rstrip('Z').partition('.')
++    kill = datetime.strptime(whole, '%Y-%m-%dT%H:%M:%S').replace(
++        tzinfo=timezone.utc, microsecond=int((fraction + '000000')[:6]))
++    lines = standby_log.splitlines()
++    if config == 'A':
++        locked = parse_log_time(next(l for l in lines if 'acquired standby lock' in l))
++        ready = parse_log_time(next(l for l in lines if 'listening on' in l))
++    else:
++        line = next(l for l in lines if 'owner epoch' in l and 'ready after' in l)
++        ready = parse_log_time(line)
++        stamp = re.search(r'acquired at (\S+?),', line).group(1)
++        whole, _, fraction = stamp.rstrip('Z').partition('.')
++        locked = datetime.strptime(whole, '%Y-%m-%dT%H:%M:%S').replace(
++            tzinfo=timezone.utc, microsecond=int((fraction + '000000')[:6]))
++    ms = lambda t: round((t - kill).total_seconds() * 1000, 3)
++    return ms(locked), ms(ready)
+ 
+ 
+ class Runner:
+@@ -209,16 +241,28 @@ class Runner:
+                 if tag in self.completed():
+                     continue
+                 self.ssh(f'cd {self.remote} && DURATION=10s KILL_AFTER=5 DATA_DIR={self.data} '
++                         f'LATENCY={int(self.a.failover_latency)} '
+                          f'./failover.sh {config} {self.remote} {self.remote}/{tag} >/dev/null', 300)
+                 self.download(f'{tag}/summary.csv', self.local / f'{tag}-summary.csv')
++                locked, ready = takeover_times(config, self.ssh(f'cat {self.remote}/{tag}/kill-time.txt'),
++                                               self.ssh(f'cat {self.remote}/{tag}/standby.log'))
+                 with (self.local / f'{tag}-summary.csv').open() as source:
+                     row = list(csv.DictReader(source))[-1]
+                 if int(row['errors']) or int(row['duplicate_effects']):
+                     self.log(f'{tag}: INVALID {row}')
+                     raise RuntimeError(f'{tag} failed validation')
++                takeover = self.local / 'failover-takeover.csv'
++                new = not takeover.exists()
++                with takeover.open('a', newline='') as sink:
++                    writer = csv.writer(sink)
++                    if new:
++                        writer.writerow(['config', 'repeat', 'kill_to_lock_ms', 'kill_to_ready_ms',
++                                         'max_request_ms', 'p50_ms', 'retried_attempts'])
++                    writer.writerow([config, repeat, locked, ready, row['max_ms'], row['p50_ms'],
++                                     row['attempt_errors']])
+                 self.mark(tag)
+-                self.log(f'{tag}: max={row["max_ms"]}ms p50={row["p50_ms"]}ms '
+-                         f'retried_attempts={row["attempt_errors"]} errors=0 duplicates=0')
++                self.log(f'{tag}: max={row["max_ms"]}ms p50={row["p50_ms"]}ms lock={locked}ms '
++                         f'ready={ready}ms retried_attempts={row["attempt_errors"]} errors=0 duplicates=0')
+         self.log('failover complete')
+ 
+     def collect(self):
+@@ -235,6 +279,8 @@ def main():
+     parser.add_argument('--data-dir', default='/var/tmp', help='disk directory for bbolt files')
+     parser.add_argument('--out', help='local results folder (default benchmark-results/<run-id>)')
+     parser.add_argument('--repeats', type=int, default=5)
++    parser.add_argument('--no-failover-latency', dest='failover_latency', action='store_false',
++                        help='skip per-request latency files in failover runs (summary keeps p50..max)')
+     parser.add_argument('phases', nargs='+',
+                         choices=['build', 'setup', 'smoke', 'throughput', 'batch', 'failover', 'collect'])
+     args = parser.parse_args()
+diff --git a/scripts/shm/failover.sh b/scripts/shm/failover.sh
+index eec3e9d..24259f2 100755
+--- a/scripts/shm/failover.sh
++++ b/scripts/shm/failover.sh
+@@ -11,11 +11,15 @@
+ # env:   DURATION (10s) KILL_AFTER (5) WORKERS (4) CLIENTS (4)
+ #        DATA_DIR (OUT_DIR; must be a real disk for A/B durability)
+ #        REGION_DIR (/dev/shm)
++#        LATENCY (1; 0 skips the per-request latency file, which is several
++#        hundred MB per run for C; summary.csv still has p50..max)
+ set -eu
+ [ "$#" -eq 3 ] || { echo "usage: $0 A|B|C BIN_DIR OUT_DIR" >&2; exit 2; }
+ config=$1 bin=$2 out=$3
+ duration=${DURATION:-10s} kill_after=${KILL_AFTER:-5}
+ workers=${WORKERS:-4} clients=${CLIENTS:-4}
++latency_out=
++[ "${LATENCY:-1}" = 0 ] || latency_out="-latency-out $out/latency.csv"
+ mkdir "$out"   # refuse to reuse an existing results directory
+ data=${DATA_DIR:-$out}
+ region=${REGION_DIR:-/dev/shm}/rifl-failover-$$
+@@ -67,7 +71,7 @@ fi
+     -duration "$duration" -concurrency "$workers" -virtual-clients "$clients" -warmup 100 \
+     -repeats 1 -retry-transport -retry-delay 1ms -timeout 5s -payload-bytes 100 -seed 452 \
+     -client-prefix "failover-$config-$$" -out "$out/summary.csv" \
+-    -latency-out "$out/latency.csv" -timeline-out "$out/timeline.csv" 2>"$out/bench.log" &
++    $latency_out -timeline-out "$out/timeline.csv" 2>"$out/bench.log" &
+ bench=$!
+ sleep "$kill_after"
+ date -u +%Y-%m-%dT%H:%M:%S.%NZ >"$out/kill-time.txt"

@@ -1,0 +1,14 @@
+{
+  "head": "0eec686c9d9b14d37e976d8053b623cc2ca98ec6",
+  "note": "HEAD plus working-tree.patch; exact source in source.tar.gz",
+  "compiler": "go version go1.27.0 linux/amd64",
+  "cgo": false,
+  "buildvcs": false,
+  "sha256": {
+    "rifl-bench": "eb34b6e967fc93470129694426875e4ff05b8577da05990a6de398026315f347",
+    "rifl-server": "022d28a4b7ea82ce46e0e1d58183b03b32fa6a4a22371c8e01e01bb2747c0973",
+    "rifl-shmserver": "a2997a287551257087a9b4cb4b1c4115830c3f941061162d74b6d070f4b7599e",
+    "source.tar.gz": "5b921546ce5ce4c56a2a9b7bd208feaa90d13a1d3845ccfd1112d977db55339d",
+    "working-tree.patch": "fdcf0ad24aedb836464f0ca84596f9ac6076367b06239fb66dad7acf29c995aa"
+  }
+}

@@ -19,7 +19,12 @@ func VerifyBatchAck(ctx context.Context, cfg Config) error {
 	if cfg.Scenario != ScenarioBatchAck || cfg.Implementation != "protected" {
 		return errors.New("batch-ack verification requires the protected batch-ack scenario")
 	}
-	before, err := stats(ctx, cfg.Address, cfg.Timeout)
+	tr, err := openTransport(cfg.normalized())
+	if err != nil {
+		return err
+	}
+	defer tr.close()
+	before, err := tr.stats(ctx)
 	if err != nil {
 		return fmt.Errorf("read stats: %w", err)
 	}
@@ -31,7 +36,7 @@ func VerifyBatchAck(ctx context.Context, cfg Config) error {
 		acked := uint64(workerRequestCount(cfg.Requests, cfg.Concurrency, worker))
 		final := acked + 1
 		for _, sequence := range []uint64{1, acked} {
-			_, err := add(ctx, cfg.Address, cfg.Timeout, riflrpc.AddRequest{
+			_, err := tr.add(ctx, riflrpc.AddRequest{
 				ID:              riflrpc.RequestID{ClientID: clientID, Sequence: sequence},
 				Delta:           cfg.Delta,
 				FirstIncomplete: final,
@@ -41,7 +46,7 @@ func VerifyBatchAck(ctx context.Context, cfg Config) error {
 				return fmt.Errorf("client %s sequence %d: expected stale rejection, got %v", clientID, sequence, err)
 			}
 		}
-		if _, err := add(ctx, cfg.Address, cfg.Timeout, riflrpc.AddRequest{
+		if _, err := tr.add(ctx, riflrpc.AddRequest{
 			ID:              riflrpc.RequestID{ClientID: clientID, Sequence: final},
 			Delta:           cfg.Delta,
 			FirstIncomplete: final,
@@ -49,7 +54,7 @@ func VerifyBatchAck(ctx context.Context, cfg Config) error {
 			return fmt.Errorf("client %s final sequence %d: expected saved result, got %v", clientID, final, err)
 		}
 	}
-	after, err := stats(ctx, cfg.Address, cfg.Timeout)
+	after, err := tr.stats(ctx)
 	if err != nil {
 		return fmt.Errorf("read stats: %w", err)
 	}

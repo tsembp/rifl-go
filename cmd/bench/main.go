@@ -49,6 +49,9 @@ func main() {
 	output := flag.String("out", "-", "CSV output path, or - for stdout")
 	latencyOutput := flag.String("latency-out", "", "optional raw per-request latency CSV")
 	timelineOutput := flag.String("timeline-out", "", "optional one-second cumulative timeline CSV")
+	transportName := flag.String("transport", "tcp", "tcp (net/rpc) or shm (shared-memory slots)")
+	region := flag.String("region", "/dev/shm/rifl-region", "shared-memory region for -transport shm")
+	slotBase := flag.Int("slot-base", 0, "first slot for -transport shm; workers use slot-base.., plus one control slot")
 	verifyBatchAck := flag.Bool("verify-batch-ack", false, "after each batch-ack repeat, check stale rejection and final-result replay; fails the run on violation")
 	flag.Parse()
 	if *repeats <= 0 || *repeatStart <= 0 || *warmup < 0 {
@@ -97,6 +100,9 @@ func main() {
 			Delta:           *delta,
 			Timeout:         *timeout,
 			ClientPrefix:    fmt.Sprintf("%s-r%d", *clientPrefix, repeat),
+			Transport:       *transportName,
+			Region:          *region,
+			SlotBase:        *slotBase,
 		}
 		result, err := benchrun.Run(context.Background(), cfg)
 		if err != nil {
